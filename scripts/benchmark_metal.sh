@@ -3,15 +3,20 @@ set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 repeats="${TREE_HMM_BENCHMARK_REPEATS:-5}"
+conditioning_ms="${TREE_HMM_BENCHMARK_CONDITIONING_MS:-5000}"
 if [[ ! "${repeats}" =~ ^[1-9][0-9]*$ ]]; then
   echo "TREE_HMM_BENCHMARK_REPEATS must be a positive integer" >&2
+  exit 2
+fi
+if [[ ! "${conditioning_ms}" =~ ^[0-9]+$ ]]; then
+  echo "TREE_HMM_BENCHMARK_CONDITIONING_MS must be a nonnegative integer" >&2
   exit 2
 fi
 
 cd "${repo_dir}"
 bazel build //:metal_benchmark
 echo "=== Apple device ==="
-system_profiler SPHardwareDataType
+system_profiler SPHardwareDataType SPDisplaysDataType
 echo "=== Metal scaling benchmark ==="
 cases=(
   "64 256"
@@ -29,6 +34,7 @@ for topology in balanced caterpillar; do
       --topology "${topology}" \
       --leaves "${leaves}" \
       --sites "${sites}" \
+      --conditioning-ms "${conditioning_ms}" \
       --repeats "${repeats}"
   done
 done

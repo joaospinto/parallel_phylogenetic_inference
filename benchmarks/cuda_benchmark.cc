@@ -28,19 +28,21 @@ int main(int argc, char **argv) {
     const BenchmarkResult result =
         site_batch == problem.sites
             ? RunInterleaved(
-                  model, options.repeats, full_workspace.CategoricalInputs(),
+                  model, options.repeats, options.conditioning_ms,
+                  full_workspace.CategoricalInputs(),
                   [&](tree_hmm::BatchedCategoricalModelView factors) {
                     return tree_hmm::cuda::LogPartitionFunctionPrepared(
                         factors, full_workspace);
                   })
             : RunChunkedInterleaved(
-                  model, options.repeats, site_batch,
+                  model, options.repeats, options.conditioning_ms, site_batch,
                   full_workspace.CategoricalInputs(),
                   [&](tree_hmm::BatchedCategoricalModelView factors) {
                     return tree_hmm::cuda::LogPartitionFunctionPrepared(
                         factors, full_workspace);
                   });
-    PrintHeader("cuda", tree_hmm::cuda::DeviceDescription(), problem);
+    PrintHeader("cuda", tree_hmm::cuda::DeviceDescription(), options,
+                problem);
     PrintRow("cuda", options, problem, result.cpu_ms, result.prepare_ms,
              result.accelerator_timings, result.total_accelerator_ms,
              result.cpu_values, result.accelerator_values,

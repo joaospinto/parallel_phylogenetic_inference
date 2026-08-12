@@ -28,19 +28,21 @@ int main(int argc, char **argv) {
     const BenchmarkResult result =
         site_batch == problem.sites
             ? RunInterleaved(
-                  model, options.repeats, full_workspace.CategoricalInputs(),
+                  model, options.repeats, options.conditioning_ms,
+                  full_workspace.CategoricalInputs(),
                   [&](tree_hmm::BatchedCategoricalModelView factors) {
                     return tree_hmm::metal::LogPartitionFunctionPrepared(
                         factors, full_workspace);
                   })
             : RunChunkedInterleaved(
-                  model, options.repeats, site_batch,
+                  model, options.repeats, options.conditioning_ms, site_batch,
                   full_workspace.CategoricalInputs(),
                   [&](tree_hmm::BatchedCategoricalModelView factors) {
                     return tree_hmm::metal::LogPartitionFunctionPrepared(
                         factors, full_workspace);
                   });
-    PrintHeader("metal", tree_hmm::metal::DeviceDescription(), problem);
+    PrintHeader("metal", tree_hmm::metal::DeviceDescription(), options,
+                problem);
     PrintRow("metal", options, problem, result.cpu_ms, result.prepare_ms,
              result.accelerator_timings, result.total_accelerator_ms,
              result.cpu_values, result.accelerator_values,

@@ -3,15 +3,15 @@
 This repository implements phylogenetic likelihood and ancestral-state
 inference on top of two independent reusable packages:
 
-- [`parallel_tree_hmm`](../parallel_tree_hmm) supplies prepared hidden Markov
-  tree inference on CPU, Metal, and CUDA;
-- [`bidirectional_tree_rake_compress`](../bidirectional_tree_rake_compress)
+- [`parallel_tree_hmm`](https://github.com/joaospinto/parallel_tree_hmm)
+  supplies prepared hidden Markov tree inference on CPU, Metal, and CUDA;
+- [`bidirectional_tree_rake_compress`](https://github.com/joaospinto/bidirectional_tree_rake_compress)
   supplies the topology planner and bidirectional rake–compress executor.
 
 Phylogenetic models, alignments, and biological file formats live here. The
 tree-HMM algebra and scheduler are not duplicated.
 
-## Implemented vertical slice
+## Capabilities
 
 The current implementation provides:
 
@@ -114,7 +114,9 @@ bazel run //:metal_benchmark -- \
 ```
 
 Warmup and workspace allocation are excluded. CPU and accelerator execution
-order alternates between repetitions to reduce order and thermal bias. The
+order alternates between repetitions to reduce order bias. The standard Metal
+sweep additionally performs five seconds of untimed interleaved conditioning
+before each case to reduce thermal-state bias on passively cooled systems. The
 reported total accelerator time includes conversion from the phylogenetic
 model to generic tree-HMM factors, host/device transfer, kernel execution, and
 result transfer.

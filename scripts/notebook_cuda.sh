@@ -24,12 +24,17 @@ compute_capability="$(nvidia-smi --query-gpu=compute_cap \
   --format=csv,noheader,nounits | head -n 1 | tr -d '[:space:].')"
 cuda_arch="${TREE_HMM_CUDA_ARCH:-${compute_capability}}"
 repeats="${TREE_HMM_BENCHMARK_REPEATS:-5}"
+empirical_repeats="${TREE_HMM_EMPIRICAL_REPEATS:-3}"
 if [[ ! "${cuda_arch}" =~ ^[0-9]+$ ]]; then
   echo "could not determine a CUDA architecture; set TREE_HMM_CUDA_ARCH" >&2
   exit 2
 fi
 if [[ ! "${repeats}" =~ ^[1-9][0-9]*$ ]]; then
   echo "TREE_HMM_BENCHMARK_REPEATS must be a positive integer" >&2
+  exit 2
+fi
+if [[ ! "${empirical_repeats}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "TREE_HMM_EMPIRICAL_REPEATS must be a positive integer" >&2
   exit 2
 fi
 
@@ -139,7 +144,7 @@ if [[ "${TREE_HMM_SKIP_BENCHMARKS:-0}" != "1" ]]; then
         --newick "${fish_dir}/actinopt_12k_raxml.tre" \
         --phylip "${fish_dir}/final_alignment.phylip" \
         --site-batch "${site_batch}" \
-        --repeats 1
+        --repeats "${empirical_repeats}"
     done
   fi
 fi

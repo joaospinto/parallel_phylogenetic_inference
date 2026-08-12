@@ -30,6 +30,7 @@ struct Options {
   std::size_t sites = 256;
   std::size_t site_batch = 0;
   int repeats = 5;
+  std::size_t conditioning_ms = 0;
   std::string topology = "balanced";
   std::optional<std::filesystem::path> newick;
   std::optional<std::filesystem::path> fasta;
@@ -57,6 +58,17 @@ inline std::size_t ParseSize(const char *text, const char *description) {
   return static_cast<std::size_t>(value);
 }
 
+inline std::size_t ParseNonnegativeSize(const char *text,
+                                        const char *description) {
+  char *end = nullptr;
+  const unsigned long long value = std::strtoull(text, &end, 10);
+  if (text == end || *end != '\0' ||
+      value > std::numeric_limits<std::size_t>::max()) {
+    throw std::invalid_argument(std::string("invalid ") + description);
+  }
+  return static_cast<std::size_t>(value);
+}
+
 inline Options ParseOptions(int argc, char **argv) {
   Options options;
   for (int index = 1; index < argc; ++index) {
@@ -75,6 +87,9 @@ inline Options ParseOptions(int argc, char **argv) {
       if (repeats > static_cast<std::size_t>(std::numeric_limits<int>::max()))
         throw std::invalid_argument("repeat count is too large");
       options.repeats = static_cast<int>(repeats);
+    } else if (option == "--conditioning-ms") {
+      options.conditioning_ms =
+          ParseNonnegativeSize(argv[index], "conditioning duration");
     } else if (option == "--topology") {
       options.topology = argv[index];
       if (options.topology != "balanced" && options.topology != "caterpillar") {
@@ -200,11 +215,32 @@ struct BenchmarkResult {
   double total_accelerator_ms = 0.0;
 };
 
+template <typename Cpu, typename Accelerator>
+void ConditionInterleaved(std::size_t milliseconds, Cpu &&cpu,
+                          Accelerator &&accelerator) {
+  if (milliseconds == 0)
+    return;
+  const Clock::time_point deadline =
+      Clock::now() + std::chrono::milliseconds(milliseconds);
+  bool cpu_first = true;
+  do {
+    if (cpu_first) {
+      cpu();
+      accelerator();
+    } else {
+      accelerator();
+      cpu();
+    }
+    cpu_first = !cpu_first;
+  } while (Clock::now() < deadline);
+}
+
 // The callable must synchronously evaluate the factors and return a view whose
 // storage remains valid until the next call. Alternating which implementation
 // runs first reduces order and thermal bias on passively cooled devices.
 template <typename Destination, typename Accelerator>
 BenchmarkResult RunInterleaved(AlignmentModelView model, int repeats,
+                               std::size_t conditioning_ms,
                                Destination destination,
                                Accelerator &&accelerator) {
   SequentialWorkspace cpu_workspace;
@@ -250,6 +286,15 @@ BenchmarkResult RunInterleaved(AlignmentModelView model, int repeats,
     download_times.push_back(accelerator_result.timings.download_ms);
     total_times.push_back(Milliseconds(total_begin, total_end));
   };
+
+  ConditionInterleaved(conditioning_ms, run_cpu, run_accelerator);
+  cpu_times.clear();
+  prepare_times.clear();
+  wall_times.clear();
+  upload_times.clear();
+  kernel_times.clear();
+  download_times.clear();
+  total_times.clear();
 
   for (int repeat = 0; repeat < repeats; ++repeat) {
     if (repeat % 2 == 0) {
@@ -332,6 +377,7 @@ BatchPrefix(tree_hmm::MutableBatchedCategoricalModelView destination,
 // backends have already materialized those values.
 template <typename Destination, typename Accelerator>
 BenchmarkResult RunChunkedInterleaved(AlignmentModelView model, int repeats,
+                                      std::size_t conditioning_ms,
                                       std::size_t site_batch,
                                       Destination full_destination,
                                       Accelerator &&accelerator) {
@@ -423,6 +469,15 @@ BenchmarkResult RunChunkedInterleaved(AlignmentModelView model, int repeats,
     total_times.push_back(total_elapsed);
   };
 
+  ConditionInterleaved(conditioning_ms, run_cpu, run_accelerator);
+  cpu_times.clear();
+  prepare_times.clear();
+  wall_times.clear();
+  upload_times.clear();
+  kernel_times.clear();
+  download_times.clear();
+  total_times.clear();
+
   for (int repeat = 0; repeat < repeats; ++repeat) {
     if (repeat % 2 == 0) {
       run_cpu();
@@ -467,16 +522,17 @@ inline double MaxRelativeError(std::span<const double> expected,
 }
 
 inline void PrintHeader(const char *backend, const std::string &device,
-                        const Problem &problem) {
+                        const Options &options, const Problem &problem) {
   const btrc::PlanStatistics statistics = btrc::Statistics(problem.plan);
   std::cout << "# backend=" << backend << '\n'
             << "# device=" << device << '\n'
             << "# dataset=" << problem.dataset << '\n'
             << "# topology=" << problem.topology << "-bifurcating-jc69\n"
             << "# prepared calls exclude workspace allocation and warmup\n"
+            << "# conditioning_ms=" << options.conditioning_ms << '\n'
             << "# CPU and accelerator execution order alternates by repeat\n"
             << "backend,dataset,topology,leaves,nodes,sites,site_batch,"
-               "primitive_levels,repeats,"
+               "primitive_levels,repeats,conditioning_ms,"
                "cpu_ms,prepare_ms,accelerator_wall_ms,upload_ms,kernel_ms,"
                "download_ms,total_accelerator_ms,wall_speedup,"
                "cpu_log_likelihood,accelerator_log_likelihood,max_abs_error,"
@@ -499,7 +555,8 @@ inline void PrintRow(const char *backend, const Options &options,
                     ? problem.sites
                     : std::min(options.site_batch, problem.sites))
             << ',' << statistics.primitive_levels << ',' << options.repeats
-            << ',' << cpu_ms << ',' << prepare_ms << ',' << accelerator.wall_ms
+            << ',' << options.conditioning_ms << ',' << cpu_ms << ','
+            << prepare_ms << ',' << accelerator.wall_ms
             << ',' << accelerator.upload_ms << ',' << accelerator.kernel_ms
             << ',' << accelerator.download_ms << ',' << total_accelerator_ms
             << ',' << cpu_ms / total_accelerator_ms << ','
