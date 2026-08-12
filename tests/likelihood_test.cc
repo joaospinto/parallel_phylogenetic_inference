@@ -119,7 +119,7 @@ int main() {
   }
 
   const std::vector<btrc::Index> observation_nodes{4, 5, 6};
-  const std::vector<N> alignment_observations{N::kA, N::kG, N::kT,
+  const std::vector<N> alignment_observations{N::kR, N::kG, N::kT,
                                               N::kC, N::kC, N::kA};
   parallel_phylogenetics::AlignmentWorkspace alignment_workspace;
   alignment_workspace.Reserve(plan, 2);
@@ -143,6 +143,48 @@ int main() {
   Check(std::equal(prepared.edge_potentials.begin(),
                    prepared.edge_potentials.end(),
                    direct.edge_potentials.begin()));
+  std::vector<std::uint8_t> categorical_observations(
+      alignment_observations.size());
+  std::vector<float> categorical_root(4);
+  std::vector<float> categorical_emissions(16 * 4);
+  std::vector<float> categorical_edges(prepared.edge_potentials.size());
+  tree_hmm::MutableBatchedCategoricalModelView categorical_destination{
+      plan,
+      4,
+      2,
+      16,
+      observation_nodes,
+      categorical_observations,
+      categorical_root,
+      categorical_emissions,
+      categorical_edges};
+  const tree_hmm::BatchedCategoricalModelView categorical =
+      parallel_phylogenetics::Prepare({plan, 2, lengths, observation_nodes,
+                                       alignment_observations, frequencies,
+                                       1.0},
+                                      categorical_destination);
+  for (std::size_t site = 0; site < 2; ++site) {
+    std::vector<float> reconstructed(plan.num_nodes() * 4, 1.0f);
+    std::copy(categorical.root_potential.begin(),
+              categorical.root_potential.end(),
+              reconstructed.begin() + plan.root() * 4);
+    for (std::size_t observation = 0; observation < observation_nodes.size();
+         ++observation) {
+      const std::uint8_t category =
+          categorical
+              .observations[site * observation_nodes.size() + observation];
+      for (std::size_t state = 0; state < 4; ++state) {
+        reconstructed[observation_nodes[observation] * 4 + state] *=
+            categorical.emission_potentials[category * 4 + state];
+      }
+    }
+    Check(std::equal(reconstructed.begin(), reconstructed.end(),
+                     prepared.node_potentials.begin() +
+                         site * plan.num_nodes() * 4));
+  }
+  Check(std::equal(categorical.edge_potentials.begin(),
+                   categorical.edge_potentials.end(),
+                   prepared.edge_potentials.begin()));
   parallel_phylogenetics::SequentialWorkspace sequential_workspace;
   sequential_workspace.Reserve(plan, 2);
   const std::span<const double> sequential =

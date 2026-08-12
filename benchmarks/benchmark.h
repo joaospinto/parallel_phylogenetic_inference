@@ -203,15 +203,15 @@ struct BenchmarkResult {
 // The callable must synchronously evaluate the factors and return a view whose
 // storage remains valid until the next call. Alternating which implementation
 // runs first reduces order and thermal bias on passively cooled devices.
-template <typename Accelerator>
+template <typename Destination, typename Accelerator>
 BenchmarkResult RunInterleaved(AlignmentModelView model, int repeats,
-                               tree_hmm::MutableBatchedModelView destination,
+                               Destination destination,
                                Accelerator &&accelerator) {
   SequentialWorkspace cpu_workspace;
   cpu_workspace.Reserve(model.plan, model.sites);
 
   static_cast<void>(LogLikelihoodsPrepared(model, cpu_workspace));
-  const tree_hmm::BatchedModelView warm_factors = Prepare(model, destination);
+  const auto warm_factors = Prepare(model, destination);
   static_cast<void>(accelerator(warm_factors));
 
   std::vector<double> cpu_times;
@@ -239,7 +239,7 @@ BenchmarkResult RunInterleaved(AlignmentModelView model, int repeats,
   const auto run_accelerator = [&] {
     const Clock::time_point total_begin = Clock::now();
     const Clock::time_point prepare_begin = total_begin;
-    const tree_hmm::BatchedModelView factors = Prepare(model, destination);
+    const auto factors = Prepare(model, destination);
     const Clock::time_point prepare_end = Clock::now();
     accelerator_result = accelerator(factors);
     const Clock::time_point total_end = Clock::now();
@@ -302,17 +302,39 @@ BatchPrefix(tree_hmm::MutableBatchedModelView destination, std::size_t batch) {
           destination.edge_potentials};
 }
 
+inline tree_hmm::MutableBatchedCategoricalModelView
+BatchPrefix(tree_hmm::MutableBatchedCategoricalModelView destination,
+            std::size_t batch) {
+  if (batch == 0 || batch > destination.batch)
+    throw std::invalid_argument(
+        "requested batch exceeds the accelerator input capacity");
+  if (destination.observations.size() % destination.batch != 0) {
+    throw std::invalid_argument(
+        "categorical accelerator input capacity has a wrong shape");
+  }
+  const std::size_t observation_values =
+      batch * (destination.observations.size() / destination.batch);
+  return {destination.plan,
+          destination.states,
+          batch,
+          destination.categories,
+          destination.observation_nodes,
+          destination.observations.first(observation_values),
+          destination.root_potential,
+          destination.emission_potentials,
+          destination.edge_potentials};
+}
+
 // Evaluates a complete alignment in fixed-size batches. The caller reserves
 // one accelerator workspace at the full batch capacity; its prefix is reused
 // for the tail, so neither execution path allocates while timing. Result
 // concatenation is deliberately outside the measured intervals because both
 // backends have already materialized those values.
-template <typename Accelerator>
-BenchmarkResult
-RunChunkedInterleaved(AlignmentModelView model, int repeats,
-                      std::size_t site_batch,
-                      tree_hmm::MutableBatchedModelView full_destination,
-                      Accelerator &&accelerator) {
+template <typename Destination, typename Accelerator>
+BenchmarkResult RunChunkedInterleaved(AlignmentModelView model, int repeats,
+                                      std::size_t site_batch,
+                                      Destination full_destination,
+                                      Accelerator &&accelerator) {
   if (site_batch == 0 || site_batch >= model.sites)
     throw std::invalid_argument(
         "chunked inference requires a batch smaller than the alignment");
@@ -379,11 +401,10 @@ RunChunkedInterleaved(AlignmentModelView model, int repeats,
          first_site += site_batch) {
       const std::size_t count = std::min(site_batch, model.sites - first_site);
       const AlignmentModelView chunk = SiteBatch(model, first_site, count);
-      tree_hmm::MutableBatchedModelView destination =
-          BatchPrefix(full_destination, count);
+      const auto destination = BatchPrefix(full_destination, count);
       const Clock::time_point total_begin = Clock::now();
       const Clock::time_point prepare_begin = total_begin;
-      const tree_hmm::BatchedModelView factors = Prepare(chunk, destination);
+      const auto factors = Prepare(chunk, destination);
       prepare_elapsed += Milliseconds(prepare_begin, Clock::now());
       const tree_hmm::PartitionView result = accelerator(factors);
       total_elapsed += Milliseconds(total_begin, Clock::now());

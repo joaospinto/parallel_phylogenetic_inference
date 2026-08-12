@@ -57,6 +57,13 @@ tree_hmm::BatchedModelView
 Prepare(AlignmentModelView model,
         tree_hmm::MutableBatchedModelView destination);
 
+// Prepares the same model using compact categorical observations. Category
+// values are the four-bit IUPAC nucleotide masks and the shared emission table
+// maps each mask to its compatible hidden states.
+tree_hmm::BatchedCategoricalModelView
+Prepare(AlignmentModelView model,
+        tree_hmm::MutableBatchedCategoricalModelView destination);
+
 class SequentialWorkspace {
 public:
   struct Impl;

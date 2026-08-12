@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <numeric>
 #include <stdexcept>
@@ -179,6 +180,52 @@ Prepare(AlignmentModelView model,
         "alignment factors do not match the destination model view");
   }
   return FillFactors(model, destination);
+}
+
+tree_hmm::BatchedCategoricalModelView
+Prepare(AlignmentModelView model,
+        tree_hmm::MutableBatchedCategoricalModelView destination) {
+  ValidateModel(model);
+  constexpr std::size_t kCategories = 16;
+  const std::size_t expected_observations = CheckedProduct(
+      {model.sites, model.observation_nodes.size()}, "observations");
+  const std::size_t expected_edges = CheckedProduct(
+      {model.plan.num_edges(), std::size_t{16}}, "alignment edge factors");
+  if (&destination.plan != &model.plan || destination.states != 4 ||
+      destination.batch != model.sites ||
+      destination.categories != kCategories ||
+      !std::equal(destination.observation_nodes.begin(),
+                  destination.observation_nodes.end(),
+                  model.observation_nodes.begin(),
+                  model.observation_nodes.end()) ||
+      destination.observations.size() != expected_observations ||
+      destination.root_potential.size() != 4 ||
+      destination.emission_potentials.size() != kCategories * 4 ||
+      destination.edge_potentials.size() != expected_edges) {
+    throw std::invalid_argument(
+        "categorical alignment factors do not match the destination model "
+        "view");
+  }
+  static_assert(sizeof(Nucleotide) == sizeof(std::uint8_t));
+  std::memcpy(destination.observations.data(), model.observations.data(),
+              model.observations.size_bytes());
+  std::transform(model.root_frequencies.begin(), model.root_frequencies.end(),
+                 destination.root_potential.begin(),
+                 [](double value) { return static_cast<float>(value); });
+  for (std::size_t category = 0; category < kCategories; ++category) {
+    for (std::size_t state = 0; state < 4; ++state) {
+      destination.emission_potentials[category * 4 + state] =
+          (category & (std::size_t{1} << state)) != 0 ? 1.0f : 0.0f;
+    }
+  }
+  for (std::size_t edge = 0; edge < model.plan.num_edges(); ++edge) {
+    const std::array<double, 16> transition = JukesCantorTransition(
+        model.branch_lengths[edge], model.substitution_rate);
+    std::transform(transition.begin(), transition.end(),
+                   destination.edge_potentials.begin() + edge * 16,
+                   [](double value) { return static_cast<float>(value); });
+  }
+  return destination;
 }
 
 SequentialWorkspace::SequentialWorkspace() : impl_(std::make_unique<Impl>()) {}
