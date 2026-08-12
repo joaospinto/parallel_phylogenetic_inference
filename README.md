@@ -24,6 +24,10 @@ The current implementation provides:
   likelihood evaluations;
 - native Metal and CUDA benchmark executables with numerical cross-checks.
 
+Alignment conversion writes directly into caller-provided accelerator input
+storage. CUDA uses pinned host buffers and Metal uses shared buffers, so the
+same generic tree-HMM call does not make a second full-batch staging copy.
+
 The accelerator kernels currently use FP32, while the conventional CPU
 baseline uses FP64. Every benchmark reports the maximum absolute discrepancy
 between their per-site log likelihoods.

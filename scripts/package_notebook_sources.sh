@@ -3,7 +3,8 @@ set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 parent_dir="$(dirname "${repo_dir}")"
-output="${1:-${repo_dir}/dist/parallel_tree_inference_sources.zip}"
+worktree_dir="$(dirname "${parent_dir}")/worktrees/parallel_phylogenetics_corpora"
+output="${1:-${worktree_dir}/parallel_tree_inference_sources.zip}"
 mkdir -p "$(dirname "${output}")"
 output="$(cd "$(dirname "${output}")" && pwd)/$(basename "${output}")"
 staging="$(mktemp -d "${TMPDIR:-/tmp}/tree-inference-package.XXXXXX")"

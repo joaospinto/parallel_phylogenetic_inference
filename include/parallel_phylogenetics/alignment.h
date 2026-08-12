@@ -48,6 +48,12 @@ private:
 tree_hmm::BatchedModelView Prepare(AlignmentModelView model,
                                    AlignmentWorkspace &workspace);
 
+// Writes the same factors directly into caller-provided accelerator staging
+// storage. This shares the implementation above and performs no allocation.
+tree_hmm::BatchedModelView
+Prepare(AlignmentModelView model,
+        tree_hmm::MutableBatchedModelView destination);
+
 class SequentialWorkspace {
 public:
   struct Impl;

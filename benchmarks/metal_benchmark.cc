@@ -21,11 +21,12 @@ int main(int argc, char **argv) {
                                    problem.observations};
     tree_hmm::metal::Workspace device_workspace;
     device_workspace.Reserve(problem.plan, 4, problem.sites);
-    const BenchmarkResult result = RunInterleaved(
-        model, options.repeats, [&](tree_hmm::BatchedModelView factors) {
-          return tree_hmm::metal::LogPartitionFunctionPrepared(
-              factors, device_workspace);
-        });
+    const BenchmarkResult result =
+        RunInterleaved(model, options.repeats, device_workspace.Inputs(),
+                       [&](tree_hmm::BatchedModelView factors) {
+                         return tree_hmm::metal::LogPartitionFunctionPrepared(
+                             factors, device_workspace);
+                       });
     PrintHeader("metal", tree_hmm::metal::DeviceDescription(), problem);
     PrintRow("metal", options, problem, result.cpu_ms, result.prepare_ms,
              result.accelerator, result.total_accelerator_ms,

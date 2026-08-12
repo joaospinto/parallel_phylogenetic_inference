@@ -183,15 +183,13 @@ struct BenchmarkResult {
 // runs first reduces order and thermal bias on passively cooled devices.
 template <typename Accelerator>
 BenchmarkResult RunInterleaved(AlignmentModelView model, int repeats,
+                               tree_hmm::MutableBatchedModelView destination,
                                Accelerator &&accelerator) {
   SequentialWorkspace cpu_workspace;
   cpu_workspace.Reserve(model.plan, model.sites);
-  AlignmentWorkspace factor_workspace;
-  factor_workspace.Reserve(model.plan, model.sites);
 
   static_cast<void>(LogLikelihoodsPrepared(model, cpu_workspace));
-  const tree_hmm::BatchedModelView warm_factors =
-      Prepare(model, factor_workspace);
+  const tree_hmm::BatchedModelView warm_factors = Prepare(model, destination);
   static_cast<void>(accelerator(warm_factors));
 
   std::vector<double> cpu_times;
@@ -219,7 +217,7 @@ BenchmarkResult RunInterleaved(AlignmentModelView model, int repeats,
   const auto run_accelerator = [&] {
     const Clock::time_point total_begin = Clock::now();
     const Clock::time_point prepare_begin = total_begin;
-    const tree_hmm::BatchedModelView factors = Prepare(model, factor_workspace);
+    const tree_hmm::BatchedModelView factors = Prepare(model, destination);
     const Clock::time_point prepare_end = Clock::now();
     accelerator_result = accelerator(factors);
     const Clock::time_point total_end = Clock::now();

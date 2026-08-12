@@ -54,13 +54,7 @@ void ValidateProbabilities(const std::array<double, 4> &frequencies) {
   }
 }
 
-void Validate(AlignmentModelView model, const btrc::Plan *reserved_plan,
-              std::size_t reserved_sites, const char *workspace_name) {
-  if (reserved_plan != &model.plan || reserved_sites != model.sites) {
-    throw std::invalid_argument(
-        std::string("prepared alignment inference requires ") + workspace_name +
-        "::Reserve for this plan and site count");
-  }
+void ValidateModel(AlignmentModelView model) {
   if (model.branch_lengths.size() != model.plan.num_edges())
     throw std::invalid_argument("one branch length is required per plan edge");
   const std::size_t expected_observations =
@@ -73,6 +67,55 @@ void Validate(AlignmentModelView model, const btrc::Plan *reserved_plan,
         "the substitution rate must be finite and nonnegative");
   }
   ValidateProbabilities(model.root_frequencies);
+}
+
+void ValidateWorkspace(AlignmentModelView model,
+                       const btrc::Plan *reserved_plan,
+                       std::size_t reserved_sites, const char *workspace_name) {
+  if (reserved_plan != &model.plan || reserved_sites != model.sites) {
+    throw std::invalid_argument(
+        std::string("prepared alignment inference requires ") + workspace_name +
+        "::Reserve for this plan and site count");
+  }
+  ValidateModel(model);
+}
+
+tree_hmm::BatchedModelView
+FillFactors(AlignmentModelView model,
+            tree_hmm::MutableBatchedModelView destination) {
+  std::fill(destination.node_potentials.begin(),
+            destination.node_potentials.end(), 1.0f);
+  for (std::size_t site = 0; site < model.sites; ++site) {
+    float *root = destination.node_potentials.data() +
+                  (site * model.plan.num_nodes() + model.plan.root()) * 4;
+    std::transform(model.root_frequencies.begin(), model.root_frequencies.end(),
+                   root,
+                   [](double value) { return static_cast<float>(value); });
+    for (std::size_t node = 0; node < model.plan.num_nodes(); ++node) {
+      const Nucleotide observation =
+          model.observations[site * model.plan.num_nodes() + node];
+      if (observation == Nucleotide::kUnknown)
+        continue;
+      const int observed_state = static_cast<int>(observation);
+      if (observed_state < 0 || observed_state >= 4)
+        throw std::invalid_argument("invalid nucleotide observation");
+      float *factor = destination.node_potentials.data() +
+                      (site * model.plan.num_nodes() + node) * 4;
+      for (int state = 0; state < 4; ++state) {
+        if (state != observed_state)
+          factor[state] = 0.0f;
+      }
+    }
+  }
+
+  for (std::size_t edge = 0; edge < model.plan.num_edges(); ++edge) {
+    const std::array<double, 16> transition = JukesCantorTransition(
+        model.branch_lengths[edge], model.substitution_rate);
+    std::transform(transition.begin(), transition.end(),
+                   destination.edge_potentials.begin() + edge * 16,
+                   [](double value) { return static_cast<float>(value); });
+  }
+  return destination;
 }
 
 } // namespace
@@ -99,40 +142,28 @@ void AlignmentWorkspace::Reserve(const btrc::Plan &plan, std::size_t sites) {
 tree_hmm::BatchedModelView Prepare(AlignmentModelView model,
                                    AlignmentWorkspace &workspace) {
   AlignmentWorkspace::Impl &storage = *workspace.impl_;
-  Validate(model, storage.plan, storage.sites, "AlignmentWorkspace");
+  ValidateWorkspace(model, storage.plan, storage.sites, "AlignmentWorkspace");
+  return FillFactors(
+      model, {model.plan, 4, model.sites, storage.nodes, storage.edges});
+}
 
-  std::fill(storage.nodes.begin(), storage.nodes.end(), 1.0f);
-  for (std::size_t site = 0; site < model.sites; ++site) {
-    float *root = storage.nodes.data() +
-                  (site * model.plan.num_nodes() + model.plan.root()) * 4;
-    std::transform(model.root_frequencies.begin(), model.root_frequencies.end(),
-                   root,
-                   [](double value) { return static_cast<float>(value); });
-    for (std::size_t node = 0; node < model.plan.num_nodes(); ++node) {
-      const Nucleotide observation =
-          model.observations[site * model.plan.num_nodes() + node];
-      if (observation == Nucleotide::kUnknown)
-        continue;
-      const int observed_state = static_cast<int>(observation);
-      if (observed_state < 0 || observed_state >= 4)
-        throw std::invalid_argument("invalid nucleotide observation");
-      float *factor =
-          storage.nodes.data() + (site * model.plan.num_nodes() + node) * 4;
-      for (int state = 0; state < 4; ++state) {
-        if (state != observed_state)
-          factor[state] = 0.0f;
-      }
-    }
+tree_hmm::BatchedModelView
+Prepare(AlignmentModelView model,
+        tree_hmm::MutableBatchedModelView destination) {
+  ValidateModel(model);
+  const std::size_t expected_nodes =
+      CheckedProduct({model.sites, model.plan.num_nodes(), std::size_t{4}},
+                     "alignment node factors");
+  const std::size_t expected_edges = CheckedProduct(
+      {model.plan.num_edges(), std::size_t{16}}, "alignment edge factors");
+  if (&destination.plan != &model.plan || destination.states != 4 ||
+      destination.batch != model.sites ||
+      destination.node_potentials.size() != expected_nodes ||
+      destination.edge_potentials.size() != expected_edges) {
+    throw std::invalid_argument(
+        "alignment factors do not match the destination model view");
   }
-
-  for (std::size_t edge = 0; edge < model.plan.num_edges(); ++edge) {
-    const std::array<double, 16> transition = JukesCantorTransition(
-        model.branch_lengths[edge], model.substitution_rate);
-    std::transform(transition.begin(), transition.end(),
-                   storage.edges.begin() + edge * 16,
-                   [](double value) { return static_cast<float>(value); });
-  }
-  return {model.plan, 4, model.sites, storage.nodes, storage.edges};
+  return FillFactors(model, destination);
 }
 
 SequentialWorkspace::SequentialWorkspace() : impl_(std::make_unique<Impl>()) {}
@@ -185,7 +216,7 @@ void SequentialWorkspace::Reserve(const btrc::Plan &plan, std::size_t sites) {
 std::span<const double> LogLikelihoodsPrepared(AlignmentModelView model,
                                                SequentialWorkspace &workspace) {
   SequentialWorkspace::Impl &storage = *workspace.impl_;
-  Validate(model, storage.plan, storage.sites, "SequentialWorkspace");
+  ValidateWorkspace(model, storage.plan, storage.sites, "SequentialWorkspace");
   for (std::size_t edge = 0; edge < model.plan.num_edges(); ++edge) {
     const std::array<double, 16> transition = JukesCantorTransition(
         model.branch_lengths[edge], model.substitution_rate);

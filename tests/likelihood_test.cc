@@ -130,6 +130,19 @@ int main() {
       alignment_workspace);
   Check(prepared.batch == 2);
   Check(prepared.states == 4);
+  std::vector<float> direct_nodes(prepared.node_potentials.size());
+  std::vector<float> direct_edges(prepared.edge_potentials.size());
+  tree_hmm::MutableBatchedModelView direct_destination{plan, 4, 2, direct_nodes,
+                                                       direct_edges};
+  const tree_hmm::BatchedModelView direct = parallel_phylogenetics::Prepare(
+      {plan, 2, lengths, alignment_observations, frequencies, 1.0},
+      direct_destination);
+  Check(std::equal(prepared.node_potentials.begin(),
+                   prepared.node_potentials.end(),
+                   direct.node_potentials.begin()));
+  Check(std::equal(prepared.edge_potentials.begin(),
+                   prepared.edge_potentials.end(),
+                   direct.edge_potentials.begin()));
   parallel_phylogenetics::SequentialWorkspace sequential_workspace;
   sequential_workspace.Reserve(plan, 2);
   const std::span<const double> sequential =
@@ -160,6 +173,9 @@ int main() {
     static_cast<void>(parallel_phylogenetics::Prepare(
         {plan, 2, lengths, alignment_observations, frequencies, 1.0},
         alignment_workspace));
+    static_cast<void>(parallel_phylogenetics::Prepare(
+        {plan, 2, lengths, alignment_observations, frequencies, 1.0},
+        direct_destination));
     static_cast<void>(parallel_phylogenetics::LogLikelihoodsPrepared(
         {plan, 2, lengths, alignment_observations, frequencies, 1.0},
         sequential_workspace));
