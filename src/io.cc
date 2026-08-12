@@ -230,15 +230,25 @@ Nucleotide Decode(char character) {
   case 'U':
     return Nucleotide::kT;
   case 'R':
+    return Nucleotide::kR;
   case 'Y':
+    return Nucleotide::kY;
   case 'S':
+    return Nucleotide::kS;
   case 'W':
+    return Nucleotide::kW;
   case 'K':
+    return Nucleotide::kK;
   case 'M':
+    return Nucleotide::kM;
   case 'B':
+    return Nucleotide::kB;
   case 'D':
+    return Nucleotide::kD;
   case 'H':
+    return Nucleotide::kH;
   case 'V':
+    return Nucleotide::kV;
   case 'N':
   case 'X':
   case '?':

@@ -43,12 +43,12 @@ Potentials BuildPotentials(SiteModelView model) {
     const Nucleotide observation = model.observations[node];
     if (observation == Nucleotide::kUnknown)
       continue;
-    const int state = static_cast<int>(observation);
-    if (state < 0 || state >= 4)
+    const std::uint8_t mask = static_cast<std::uint8_t>(observation);
+    if (mask == 0 || mask > static_cast<std::uint8_t>(Nucleotide::kUnknown))
       throw std::invalid_argument("invalid nucleotide observation");
     double *potential = result.nodes.data() + node * 4;
     for (int candidate = 0; candidate < 4; ++candidate) {
-      if (candidate != state)
+      if (!AllowsState(observation, candidate))
         potential[candidate] = 0.0;
     }
   }

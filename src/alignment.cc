@@ -111,13 +111,13 @@ FillFactors(AlignmentModelView model,
           model.observations[site * model.observation_nodes.size() + index];
       if (observation == Nucleotide::kUnknown)
         continue;
-      const int observed_state = static_cast<int>(observation);
-      if (observed_state < 0 || observed_state >= 4)
+      const std::uint8_t mask = static_cast<std::uint8_t>(observation);
+      if (mask == 0 || mask > static_cast<std::uint8_t>(Nucleotide::kUnknown))
         throw std::invalid_argument("invalid nucleotide observation");
       float *factor = destination.node_potentials.data() +
                       (site * model.plan.num_nodes() + node) * 4;
       for (int state = 0; state < 4; ++state) {
-        if (state != observed_state)
+        if (!AllowsState(observation, state))
           factor[state] = 0.0f;
       }
     }
@@ -254,12 +254,12 @@ std::span<const double> LogLikelihoodsPrepared(AlignmentModelView model,
           model.observations[site * model.observation_nodes.size() + index];
       if (observation == Nucleotide::kUnknown)
         continue;
-      const int observed_state = static_cast<int>(observation);
-      if (observed_state < 0 || observed_state >= 4)
+      const std::uint8_t mask = static_cast<std::uint8_t>(observation);
+      if (mask == 0 || mask > static_cast<std::uint8_t>(Nucleotide::kUnknown))
         throw std::invalid_argument("invalid nucleotide observation");
       double *factor = site_partials + node * 4;
       for (int state = 0; state < 4; ++state) {
-        if (state != observed_state)
+        if (!AllowsState(observation, state))
           factor[state] = 0.0;
       }
     }

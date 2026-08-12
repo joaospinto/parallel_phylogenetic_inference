@@ -14,6 +14,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <numeric>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -160,10 +161,12 @@ inline Problem MakeProblem(const Options &options) {
   for (std::size_t leaf = 0; leaf < leaves; ++leaf)
     observation_nodes[leaf] = static_cast<btrc::Index>(first_leaf + leaf);
   std::vector<Nucleotide> observations(sites * leaves);
+  constexpr std::array<Nucleotide, 4> kStates{Nucleotide::kA, Nucleotide::kC,
+                                              Nucleotide::kG, Nucleotide::kT};
   for (std::size_t site = 0; site < sites; ++site) {
     for (std::size_t leaf = 0; leaf < leaves; ++leaf) {
       const std::size_t state = (site * 17 + leaf * 13 + (site ^ leaf)) % 4;
-      observations[site * leaves + leaf] = static_cast<Nucleotide>(state);
+      observations[site * leaves + leaf] = kStates[state];
     }
   }
   return {std::move(plan),
@@ -454,7 +457,8 @@ inline void PrintHeader(const char *backend, const std::string &device,
             << "backend,dataset,topology,leaves,nodes,sites,site_batch,"
                "primitive_levels,repeats,"
                "cpu_ms,prepare_ms,accelerator_wall_ms,upload_ms,kernel_ms,"
-               "download_ms,total_accelerator_ms,wall_speedup,max_abs_error,"
+               "download_ms,total_accelerator_ms,wall_speedup,"
+               "cpu_log_likelihood,accelerator_log_likelihood,max_abs_error,"
                "max_relative_error\n";
   static_cast<void>(statistics);
 }
@@ -462,8 +466,10 @@ inline void PrintHeader(const char *backend, const std::string &device,
 inline void PrintRow(const char *backend, const Options &options,
                      const Problem &problem, double cpu_ms, double prepare_ms,
                      const tree_hmm::AcceleratorTimings &accelerator,
-                     double total_accelerator_ms, double absolute_error,
-                     double relative_error) {
+                     double total_accelerator_ms,
+                     std::span<const double> cpu_values,
+                     std::span<const float> accelerator_values,
+                     double absolute_error, double relative_error) {
   const btrc::PlanStatistics statistics = btrc::Statistics(problem.plan);
   std::cout << std::setprecision(10) << backend << ',' << problem.dataset << ','
             << problem.topology << ',' << problem.leaves << ','
@@ -475,8 +481,11 @@ inline void PrintRow(const char *backend, const Options &options,
             << ',' << cpu_ms << ',' << prepare_ms << ',' << accelerator.wall_ms
             << ',' << accelerator.upload_ms << ',' << accelerator.kernel_ms
             << ',' << accelerator.download_ms << ',' << total_accelerator_ms
-            << ',' << cpu_ms / total_accelerator_ms << ',' << absolute_error
-            << ',' << relative_error << '\n';
+            << ',' << cpu_ms / total_accelerator_ms << ','
+            << std::accumulate(cpu_values.begin(), cpu_values.end(), 0.0) << ','
+            << std::accumulate(accelerator_values.begin(),
+                               accelerator_values.end(), 0.0)
+            << ',' << absolute_error << ',' << relative_error << '\n';
 }
 
 } // namespace parallel_phylogenetics::benchmark

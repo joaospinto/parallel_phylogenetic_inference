@@ -63,11 +63,10 @@ double FelsensteinReference(
   }
   std::vector<double> partials(plan.num_nodes() * 4, 1.0);
   for (std::size_t node = 0; node < plan.num_nodes(); ++node) {
-    if (observations[node] == parallel_phylogenetics::Nucleotide::kUnknown)
-      continue;
-    std::fill(partials.begin() + node * 4, partials.begin() + (node + 1) * 4,
-              0.0);
-    partials[node * 4 + static_cast<int>(observations[node])] = 1.0;
+    for (std::size_t state = 0; state < 4; ++state) {
+      if (!parallel_phylogenetics::AllowsState(observations[node], state))
+        partials[node * 4 + state] = 0.0;
+    }
   }
   for (auto iterator = order.rbegin(); iterator != order.rend(); ++iterator) {
     const std::size_t node = *iterator;
@@ -203,14 +202,19 @@ int main() {
 
   const parallel_phylogenetics::SequenceAlignment parsed_alignment =
       parallel_phylogenetics::ParseFasta(
-          ">A description\nACG\n>B_taxon description\nA-N\n>C\nTCG\n");
-  Check(parsed_alignment.sites == 3);
+          ">A description\nRYSW\n>B_taxon description\nKMBD\n>C\nHVN-\n");
+  Check(parsed_alignment.sites == 4);
   const parallel_phylogenetics::EncodedAlignment encoded =
       parallel_phylogenetics::EncodeAlignment(parsed_tree, parsed_alignment);
-  Check(encoded.sites == 3);
+  Check(encoded.sites == 4);
   Check(encoded.observation_nodes.size() == 3);
   Check(encoded.observations.size() ==
         encoded.sites * encoded.observation_nodes.size());
+  const std::array<N, 12> expected_ambiguities{
+      N::kR, N::kK, N::kH,       N::kY, N::kM, N::kV,
+      N::kS, N::kB, N::kUnknown, N::kW, N::kD, N::kUnknown};
+  Check(std::equal(encoded.observations.begin(), encoded.observations.end(),
+                   expected_ambiguities.begin()));
 
   const parallel_phylogenetics::SequenceAlignment parsed_phylip =
       parallel_phylogenetics::ParsePhylip("3 3\nA ACG\nB_taxon A-N\nC TCG\n");
@@ -218,4 +222,33 @@ int main() {
   Check(parsed_phylip.records.size() == 3);
   Check(parsed_phylip.records[1].name == "B_taxon");
   Check(parsed_phylip.records[1].sequence == "A-N");
+
+  const parallel_phylogenetics::Phylogeny ambiguity_tree =
+      parallel_phylogenetics::ParseNewick(
+          "((A:0.1,B:0.2):0.3,(C:0.4,D:0.5):0.6);");
+  const parallel_phylogenetics::SequenceAlignment ambiguity_alignment =
+      parallel_phylogenetics::ParsePhylip(
+          "4 12\nA ACRYSWKMBDHV\nB AAAAAAAAAAAA\n"
+          "C TTTTTTTTTTTT\nD CCCCCCCCCCCC\n");
+  const parallel_phylogenetics::EncodedAlignment ambiguity_encoded =
+      parallel_phylogenetics::EncodeAlignment(ambiguity_tree,
+                                              ambiguity_alignment);
+  parallel_phylogenetics::SequentialWorkspace ambiguity_workspace;
+  ambiguity_workspace.Reserve(ambiguity_tree.plan, ambiguity_encoded.sites);
+  const std::span<const double> ambiguity_likelihoods =
+      parallel_phylogenetics::LogLikelihoodsPrepared(
+          {ambiguity_tree.plan, ambiguity_encoded.sites,
+           ambiguity_tree.branch_lengths, ambiguity_encoded.observation_nodes,
+           ambiguity_encoded.observations},
+          ambiguity_workspace);
+  // Independent per-site values from RAxML-NG under the same JC69 model.
+  const std::array<double, 12> expected_ambiguity_likelihoods{
+      -5.040094590240, -6.981834284265, -4.934072093490, -6.251378523747,
+      -6.405406411110, -4.896548084956, -6.363574230408, -4.906040938581,
+      -5.932518541162, -4.804068470622, -4.779412771342, -4.812719161660};
+  Check(std::equal(ambiguity_likelihoods.begin(), ambiguity_likelihoods.end(),
+                   expected_ambiguity_likelihoods.begin(),
+                   [](double actual, double expected_value) {
+                     return Near(actual, expected_value);
+                   }));
 }

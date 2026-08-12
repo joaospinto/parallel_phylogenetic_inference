@@ -41,6 +41,7 @@ int main(int argc, char **argv) {
     PrintHeader("cuda", tree_hmm::cuda::DeviceDescription(), problem);
     PrintRow("cuda", options, problem, result.cpu_ms, result.prepare_ms,
              result.accelerator_timings, result.total_accelerator_ms,
+             result.cpu_values, result.accelerator_values,
              MaxAbsoluteError(result.cpu_values, result.accelerator_values),
              MaxRelativeError(result.cpu_values, result.accelerator_values));
     return 0;
