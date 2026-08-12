@@ -25,6 +25,34 @@ struct AlignmentModelView {
   double substitution_rate = 1.0;
 };
 
+// Returns a view of a contiguous range of alignment sites without copying its
+// observations. This is useful for capacity-bounded accelerator recovery,
+// whose outputs are naturally consumed one site batch at a time.
+AlignmentModelView SelectSites(AlignmentModelView model, std::size_t first_site,
+                               std::size_t site_count);
+
+// One maximum-posterior assignment per site. States have shape [site, node]
+// and use the order A=0, C=1, G=2, T=3.
+struct AlignmentMaximumView {
+  std::span<const float> log_weights;
+  std::span<const std::uint32_t> states;
+};
+
+// One posterior draw per site. States have shape [site, node] and use the
+// order A=0, C=1, G=2, T=3.
+struct AlignmentPosteriorSampleView {
+  std::span<const std::uint32_t> states;
+};
+
+// Posterior probabilities for every site in the supplied alignment view.
+// Ancestral states have shape [site, node, A/C/G/T], and substitutions have
+// shape [site, edge, parent nucleotide, child nucleotide].
+struct AlignmentPosteriorView {
+  std::span<const float> log_likelihoods;
+  std::span<const float> ancestral_states;
+  std::span<const float> substitutions;
+};
+
 class AlignmentWorkspace {
 public:
   struct Impl;

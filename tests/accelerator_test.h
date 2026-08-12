@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "parallel_phylogenetics/alignment.h"
+#include "tree_hmm/inference.h"
 
 namespace parallel_phylogenetics::test {
 
@@ -53,6 +54,136 @@ void TestAccelerator(Workspace &workspace, Reserve &&reserve,
             "phylogenetic accelerator likelihood is inaccurate");
     }
   }
+}
+
+template <class Workspace, class ReserveMaximum, class Maximum,
+          class ReserveSampling, class Sample, class ReserveMarginals,
+          class Marginals>
+void TestRecoveryAccelerator(
+    Workspace &workspace, ReserveMaximum &&reserve_maximum, Maximum &&maximum,
+    ReserveSampling &&reserve_sampling, Sample &&sample,
+    ReserveMarginals &&reserve_marginals, Marginals &&marginals) {
+  const btrc::Plan plan =
+      btrc::MakePlan(std::vector<std::int64_t>{-1, 0, 0, 1, 1, 3, 2});
+  const std::vector<double> lengths{0.1, 0.3, 0.2, 0.4, 0.15, 0.5};
+  const std::vector<btrc::Index> observation_nodes{4, 5, 6};
+  constexpr std::size_t kSites = 5;
+  using N = Nucleotide;
+  const std::vector<N> observations{
+      N::kR, N::kG, N::kT, N::kC, N::kC, N::kA, N::kUnknown, N::kY,
+      N::kB, N::kV, N::kW, N::kD, N::kH, N::kM, N::kS,
+  };
+  const std::array<double, 4> frequencies{0.3, 0.2, 0.2, 0.3};
+  const AlignmentModelView full{
+      plan, kSites, lengths, observation_nodes, observations, frequencies, 1.0};
+  const AlignmentModelView model = SelectSites(full, 1, 2);
+
+  AlignmentWorkspace factor_workspace;
+  factor_workspace.Reserve(plan, model.sites);
+  const tree_hmm::BatchedModelView factors = Prepare(model, factor_workspace);
+  tree_hmm::Workspace cpu_workspace;
+  cpu_workspace.Reserve(plan, 4);
+
+  reserve_maximum(full, 2);
+  const AlignmentMaximumView actual_maximum = maximum(model, workspace);
+  Check(actual_maximum.log_weights.size() == model.sites,
+        "phylogenetic accelerator returned a wrong MAP weight shape");
+  Check(actual_maximum.states.size() == model.sites * plan.num_nodes(),
+        "phylogenetic accelerator returned a wrong MAP state shape");
+  for (std::size_t site = 0; site < model.sites; ++site) {
+    const std::size_t node_values = plan.num_nodes() * 4;
+    const std::vector<double> nodes(
+        factors.node_potentials.begin() + site * node_values,
+        factors.node_potentials.begin() + (site + 1) * node_values);
+    const std::vector<double> edges(factors.edge_potentials.begin(),
+                                    factors.edge_potentials.end());
+    const tree_hmm::MaximumAssignmentView expected =
+        tree_hmm::MaximumAPosterioriPrepared({plan, 4, nodes, edges},
+                                             cpu_workspace);
+    Check(std::abs(actual_maximum.log_weights[site] - expected.log_weight) <
+              2e-5,
+          "phylogenetic accelerator MAP weight is inaccurate");
+    for (std::size_t node = 0; node < plan.num_nodes(); ++node) {
+      Check(actual_maximum.states[site * plan.num_nodes() + node] ==
+                expected.states[node],
+            "phylogenetic accelerator MAP state is inaccurate");
+    }
+  }
+
+  std::vector<float> uniforms(model.sites * plan.num_nodes());
+  for (std::size_t index = 0; index < uniforms.size(); ++index)
+    uniforms[index] = 0.07f + 0.11f * static_cast<float>(index % 8);
+  reserve_sampling(full, 2);
+  const AlignmentPosteriorSampleView actual_sample =
+      sample(model, uniforms, workspace);
+  Check(actual_sample.states.size() == model.sites * plan.num_nodes(),
+        "phylogenetic accelerator returned a wrong sample shape");
+  for (std::size_t site = 0; site < model.sites; ++site) {
+    const std::size_t node_values = plan.num_nodes() * 4;
+    const std::vector<double> nodes(
+        factors.node_potentials.begin() + site * node_values,
+        factors.node_potentials.begin() + (site + 1) * node_values);
+    const std::vector<double> edges(factors.edge_potentials.begin(),
+                                    factors.edge_potentials.end());
+    const std::vector<double> site_uniforms(
+        uniforms.begin() + site * plan.num_nodes(),
+        uniforms.begin() + (site + 1) * plan.num_nodes());
+    const std::span<const std::size_t> expected =
+        tree_hmm::PosteriorSamplePrepared({plan, 4, nodes, edges},
+                                          site_uniforms, cpu_workspace);
+    for (std::size_t node = 0; node < plan.num_nodes(); ++node) {
+      Check(actual_sample.states[site * plan.num_nodes() + node] ==
+                expected[node],
+            "phylogenetic accelerator posterior sample is inaccurate");
+    }
+  }
+
+  reserve_marginals(full, 2);
+  const AlignmentPosteriorView actual_marginals = marginals(model, workspace);
+  const std::size_t nodes_per_site = plan.num_nodes() * 4;
+  const std::size_t edges_per_site = plan.num_edges() * 16;
+  Check(actual_marginals.log_likelihoods.size() == model.sites,
+        "phylogenetic accelerator returned a wrong likelihood shape");
+  Check(actual_marginals.ancestral_states.size() ==
+            model.sites * nodes_per_site,
+        "phylogenetic accelerator returned a wrong node-marginal shape");
+  Check(actual_marginals.substitutions.size() == model.sites * edges_per_site,
+        "phylogenetic accelerator returned a wrong edge-marginal shape");
+  for (std::size_t site = 0; site < model.sites; ++site) {
+    const std::vector<double> nodes(
+        factors.node_potentials.begin() + site * nodes_per_site,
+        factors.node_potentials.begin() + (site + 1) * nodes_per_site);
+    const std::vector<double> edges(factors.edge_potentials.begin(),
+                                    factors.edge_potentials.end());
+    const tree_hmm::MarginalView expected =
+        tree_hmm::PosteriorMarginalsPrepared({plan, 4, nodes, edges},
+                                             cpu_workspace);
+    Check(std::abs(actual_marginals.log_likelihoods[site] -
+                   expected.log_partition) < 2e-5,
+          "phylogenetic accelerator marginal likelihood is inaccurate");
+    for (std::size_t index = 0; index < nodes_per_site; ++index) {
+      Check(
+          std::abs(
+              actual_marginals.ancestral_states[site * nodes_per_site + index] -
+              expected.nodes[index]) < 8e-5,
+          "phylogenetic accelerator node marginal is inaccurate");
+    }
+    for (std::size_t index = 0; index < edges_per_site; ++index) {
+      Check(std::abs(
+                actual_marginals.substitutions[site * edges_per_site + index] -
+                expected.edges[index]) < 8e-5,
+            "phylogenetic accelerator edge marginal is inaccurate");
+    }
+  }
+
+  bool oversized_batch_rejected = false;
+  try {
+    static_cast<void>(marginals(SelectSites(full, 0, 3), workspace));
+  } catch (const std::invalid_argument &) {
+    oversized_batch_rejected = true;
+  }
+  Check(oversized_batch_rejected,
+        "phylogenetic accelerator accepted a recovery batch over capacity");
 }
 
 } // namespace parallel_phylogenetics::test

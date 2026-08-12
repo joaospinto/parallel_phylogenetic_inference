@@ -136,6 +136,23 @@ FillFactors(AlignmentModelView model,
 
 } // namespace
 
+AlignmentModelView SelectSites(AlignmentModelView model, std::size_t first_site,
+                               std::size_t site_count) {
+  ValidateModel(model);
+  if (site_count == 0 || first_site > model.sites ||
+      site_count > model.sites - first_site)
+    throw std::invalid_argument("invalid phylogenetic alignment site range");
+  return {
+      model.plan,
+      site_count,
+      model.branch_lengths,
+      model.observation_nodes,
+      model.observations.subspan(first_site * model.observation_nodes.size(),
+                                 site_count * model.observation_nodes.size()),
+      model.root_frequencies,
+      model.substitution_rate};
+}
+
 AlignmentWorkspace::AlignmentWorkspace() : impl_(std::make_unique<Impl>()) {}
 AlignmentWorkspace::~AlignmentWorkspace() = default;
 AlignmentWorkspace::AlignmentWorkspace(AlignmentWorkspace &&) noexcept =

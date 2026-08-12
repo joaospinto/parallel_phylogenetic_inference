@@ -1,23 +1,15 @@
 #include "parallel_phylogenetics/metal.h"
 
-#include <algorithm>
 #include <stdexcept>
 #include <utility>
-#include <vector>
 
 #include "src/accelerator_internal.h"
 #include "tree_hmm/metal.h"
 
 namespace parallel_phylogenetics::metal {
 
-struct Workspace::Impl {
-  const btrc::Plan *plan = nullptr;
-  std::size_t sites = 0;
-  std::size_t batch_capacity = 0;
-  std::vector<btrc::Index> observation_nodes;
-  std::vector<float> output;
-  tree_hmm::metal::Workspace tree_hmm;
-};
+struct Workspace::Impl
+    : internal::WorkspaceStorage<tree_hmm::metal::Workspace> {};
 
 Workspace::Workspace() : impl_(std::make_unique<Impl>()) {}
 Workspace::~Workspace() = default;
@@ -30,34 +22,53 @@ std::string DeviceDescription() { return tree_hmm::metal::DeviceDescription(); }
 
 void Workspace::Reserve(AlignmentModelView model,
                         std::size_t site_batch_capacity) {
-  if (model.sites == 0)
-    throw std::invalid_argument("an alignment must contain at least one site");
-  const std::size_t batch =
-      site_batch_capacity == 0 ? model.sites : site_batch_capacity;
-  if (batch > model.sites)
-    throw std::invalid_argument(
-        "site batch capacity cannot exceed the alignment site count");
   Impl &storage = *impl_;
-  storage.tree_hmm.Reserve(model.plan, 4, batch);
-  storage.plan = &model.plan;
-  storage.sites = model.sites;
-  storage.batch_capacity = batch;
-  storage.observation_nodes.assign(model.observation_nodes.begin(),
-                                   model.observation_nodes.end());
-  storage.output.resize(model.sites);
+  internal::ReserveOperation(storage, model, site_batch_capacity,
+                             internal::PreparedOperation::kLikelihood,
+                             [&](std::size_t batch) {
+                               storage.tree_hmm.Reserve(model.plan, 4, batch);
+                             });
+}
+
+void Workspace::ReserveMaximum(AlignmentModelView model,
+                               std::size_t site_batch_capacity) {
+  Impl &storage = *impl_;
+  internal::ReserveOperation(
+      storage, model, site_batch_capacity,
+      internal::PreparedOperation::kMaximum, [&](std::size_t batch) {
+        storage.tree_hmm.ReserveMaximum(model.plan, 4, batch);
+      });
+}
+
+void Workspace::ReserveSampling(AlignmentModelView model,
+                                std::size_t site_batch_capacity) {
+  Impl &storage = *impl_;
+  internal::ReserveOperation(
+      storage, model, site_batch_capacity,
+      internal::PreparedOperation::kSampling, [&](std::size_t batch) {
+        storage.tree_hmm.ReserveSampling(model.plan, 4, batch);
+      });
+}
+
+void Workspace::ReserveMarginals(AlignmentModelView model,
+                                 std::size_t site_batch_capacity) {
+  Impl &storage = *impl_;
+  internal::ReserveOperation(
+      storage, model, site_batch_capacity,
+      internal::PreparedOperation::kMarginals, [&](std::size_t batch) {
+        storage.tree_hmm.ReserveMarginals(model.plan, 4, batch);
+      });
 }
 
 std::span<const float> LogLikelihoodsPrepared(AlignmentModelView model,
                                               Workspace &workspace) {
   Workspace::Impl &storage = *workspace.impl_;
-  if (storage.plan != &model.plan || storage.sites != model.sites ||
-      storage.observation_nodes.size() != model.observation_nodes.size() ||
-      !std::equal(
-          storage.observation_nodes.begin(), storage.observation_nodes.end(),
-          model.observation_nodes.begin(), model.observation_nodes.end())) {
+  if (storage.sites != model.sites) {
     throw std::invalid_argument(
         "prepared Metal likelihoods require Reserve for this alignment shape");
   }
+  internal::ValidatePrepared(model, storage,
+                             internal::PreparedOperation::kLikelihood, false);
   return internal::LogLikelihoodsPrepared(
       model, storage.batch_capacity, storage.tree_hmm.Inputs(),
       [&](tree_hmm::BatchedModelView factors) {
@@ -65,6 +76,48 @@ std::span<const float> LogLikelihoodsPrepared(AlignmentModelView model,
                                                              storage.tree_hmm);
       },
       storage.output);
+}
+
+AlignmentMaximumView MaximumAPosterioriPrepared(AlignmentModelView model,
+                                                Workspace &workspace) {
+  Workspace::Impl &storage = *workspace.impl_;
+  internal::ValidatePrepared(model, storage,
+                             internal::PreparedOperation::kMaximum);
+  return internal::MaximumAPosterioriPrepared(
+      model, storage.tree_hmm.Inputs(),
+      [&](tree_hmm::BatchedModelView factors) {
+        return tree_hmm::metal::MaximumAPosterioriPrepared(factors,
+                                                           storage.tree_hmm);
+      });
+}
+
+AlignmentPosteriorSampleView
+PosteriorSamplePrepared(AlignmentModelView model,
+                        std::span<const float> uniforms, Workspace &workspace) {
+  Workspace::Impl &storage = *workspace.impl_;
+  internal::ValidatePrepared(model, storage,
+                             internal::PreparedOperation::kSampling);
+  return internal::PosteriorSamplePrepared(
+      model, uniforms, storage.tree_hmm.Inputs(),
+      [&](std::size_t batch) { return storage.tree_hmm.Uniforms(batch); },
+      [&](tree_hmm::BatchedModelView factors,
+          std::span<const float> staged_uniforms) {
+        return tree_hmm::metal::PosteriorSamplePrepared(
+            factors, staged_uniforms, storage.tree_hmm);
+      });
+}
+
+AlignmentPosteriorView PosteriorMarginalsPrepared(AlignmentModelView model,
+                                                  Workspace &workspace) {
+  Workspace::Impl &storage = *workspace.impl_;
+  internal::ValidatePrepared(model, storage,
+                             internal::PreparedOperation::kMarginals);
+  return internal::PosteriorMarginalsPrepared(
+      model, storage.tree_hmm.Inputs(),
+      [&](tree_hmm::BatchedModelView factors) {
+        return tree_hmm::metal::PosteriorMarginalsPrepared(factors,
+                                                           storage.tree_hmm);
+      });
 }
 
 } // namespace parallel_phylogenetics::metal

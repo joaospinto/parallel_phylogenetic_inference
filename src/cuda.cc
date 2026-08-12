@@ -1,22 +1,14 @@
 #include "parallel_phylogenetics/cuda.h"
 
-#include <algorithm>
 #include <stdexcept>
 #include <utility>
-#include <vector>
 
 #include "src/accelerator_internal.h"
 #include "tree_hmm/cuda.h"
 
 namespace parallel_phylogenetics::cuda {
 
-struct Workspace::Impl {
-  const btrc::Plan *plan = nullptr;
-  std::size_t sites = 0;
-  std::size_t batch_capacity = 0;
-  std::vector<btrc::Index> observation_nodes;
-  std::vector<float> output;
-  tree_hmm::cuda::Workspace tree_hmm;
+struct Workspace::Impl : internal::WorkspaceStorage<tree_hmm::cuda::Workspace> {
 };
 
 Workspace::Workspace() : impl_(std::make_unique<Impl>()) {}
@@ -32,35 +24,57 @@ std::string DeviceDescription(int device) {
 
 void Workspace::Reserve(AlignmentModelView model,
                         std::size_t site_batch_capacity, int device) {
-  if (model.sites == 0)
-    throw std::invalid_argument("an alignment must contain at least one site");
-  const std::size_t batch =
-      site_batch_capacity == 0 ? model.sites : site_batch_capacity;
-  if (batch > model.sites)
-    throw std::invalid_argument(
-        "site batch capacity cannot exceed the alignment site count");
   Impl &storage = *impl_;
-  storage.tree_hmm.ReserveCategorical(model.plan, 4, batch, 16,
-                                      model.observation_nodes, device);
-  storage.plan = &model.plan;
-  storage.sites = model.sites;
-  storage.batch_capacity = batch;
-  storage.observation_nodes.assign(model.observation_nodes.begin(),
-                                   model.observation_nodes.end());
-  storage.output.resize(model.sites);
+  internal::ReserveOperation(
+      storage, model, site_batch_capacity,
+      internal::PreparedOperation::kLikelihood, [&](std::size_t batch) {
+        storage.tree_hmm.ReserveCategorical(model.plan, 4, batch, 16,
+                                            model.observation_nodes, device);
+      });
+}
+
+void Workspace::ReserveMaximum(AlignmentModelView model,
+                               std::size_t site_batch_capacity, int device) {
+  Impl &storage = *impl_;
+  internal::ReserveOperation(
+      storage, model, site_batch_capacity,
+      internal::PreparedOperation::kMaximum, [&](std::size_t batch) {
+        storage.tree_hmm.ReserveCategoricalMaximum(
+            model.plan, 4, batch, 16, model.observation_nodes, device);
+      });
+}
+
+void Workspace::ReserveSampling(AlignmentModelView model,
+                                std::size_t site_batch_capacity, int device) {
+  Impl &storage = *impl_;
+  internal::ReserveOperation(
+      storage, model, site_batch_capacity,
+      internal::PreparedOperation::kSampling, [&](std::size_t batch) {
+        storage.tree_hmm.ReserveCategoricalSampling(
+            model.plan, 4, batch, 16, model.observation_nodes, device);
+      });
+}
+
+void Workspace::ReserveMarginals(AlignmentModelView model,
+                                 std::size_t site_batch_capacity, int device) {
+  Impl &storage = *impl_;
+  internal::ReserveOperation(
+      storage, model, site_batch_capacity,
+      internal::PreparedOperation::kMarginals, [&](std::size_t batch) {
+        storage.tree_hmm.ReserveCategoricalMarginals(
+            model.plan, 4, batch, 16, model.observation_nodes, device);
+      });
 }
 
 std::span<const float> LogLikelihoodsPrepared(AlignmentModelView model,
                                               Workspace &workspace) {
   Workspace::Impl &storage = *workspace.impl_;
-  if (storage.plan != &model.plan || storage.sites != model.sites ||
-      storage.observation_nodes.size() != model.observation_nodes.size() ||
-      !std::equal(
-          storage.observation_nodes.begin(), storage.observation_nodes.end(),
-          model.observation_nodes.begin(), model.observation_nodes.end())) {
+  if (storage.sites != model.sites) {
     throw std::invalid_argument(
         "prepared CUDA likelihoods require Reserve for this alignment shape");
   }
+  internal::ValidatePrepared(model, storage,
+                             internal::PreparedOperation::kLikelihood, false);
   return internal::LogLikelihoodsPrepared(
       model, storage.batch_capacity, storage.tree_hmm.CategoricalInputs(),
       [&](tree_hmm::BatchedCategoricalModelView factors) {
@@ -68,6 +82,48 @@ std::span<const float> LogLikelihoodsPrepared(AlignmentModelView model,
                                                             storage.tree_hmm);
       },
       storage.output);
+}
+
+AlignmentMaximumView MaximumAPosterioriPrepared(AlignmentModelView model,
+                                                Workspace &workspace) {
+  Workspace::Impl &storage = *workspace.impl_;
+  internal::ValidatePrepared(model, storage,
+                             internal::PreparedOperation::kMaximum);
+  return internal::MaximumAPosterioriPrepared(
+      model, storage.tree_hmm.CategoricalInputs(),
+      [&](tree_hmm::BatchedCategoricalModelView factors) {
+        return tree_hmm::cuda::MaximumAPosterioriPrepared(factors,
+                                                          storage.tree_hmm);
+      });
+}
+
+AlignmentPosteriorSampleView
+PosteriorSamplePrepared(AlignmentModelView model,
+                        std::span<const float> uniforms, Workspace &workspace) {
+  Workspace::Impl &storage = *workspace.impl_;
+  internal::ValidatePrepared(model, storage,
+                             internal::PreparedOperation::kSampling);
+  return internal::PosteriorSamplePrepared(
+      model, uniforms, storage.tree_hmm.CategoricalInputs(),
+      [&](std::size_t batch) { return storage.tree_hmm.Uniforms(batch); },
+      [&](tree_hmm::BatchedCategoricalModelView factors,
+          std::span<const float> staged_uniforms) {
+        return tree_hmm::cuda::PosteriorSamplePrepared(factors, staged_uniforms,
+                                                       storage.tree_hmm);
+      });
+}
+
+AlignmentPosteriorView PosteriorMarginalsPrepared(AlignmentModelView model,
+                                                  Workspace &workspace) {
+  Workspace::Impl &storage = *workspace.impl_;
+  internal::ValidatePrepared(model, storage,
+                             internal::PreparedOperation::kMarginals);
+  return internal::PosteriorMarginalsPrepared(
+      model, storage.tree_hmm.CategoricalInputs(),
+      [&](tree_hmm::BatchedCategoricalModelView factors) {
+        return tree_hmm::cuda::PosteriorMarginalsPrepared(factors,
+                                                          storage.tree_hmm);
+      });
 }
 
 } // namespace parallel_phylogenetics::cuda

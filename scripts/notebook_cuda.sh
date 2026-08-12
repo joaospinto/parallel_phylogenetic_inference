@@ -108,36 +108,38 @@ if command -v compute-sanitizer >/dev/null 2>&1 &&
   done
 fi
 
-echo "=== CUDA scaling benchmark ==="
-cases=(
-  "64 256"
-  "256 256"
-  "1024 256"
-  "4096 256"
-  "4096 1024"
-  "16384 256"
-  "65536 64"
-)
-for topology in balanced caterpillar; do
-  for specification in "${cases[@]}"; do
-    read -r leaves sites <<< "${specification}"
-    bazel-bin/cuda_benchmark \
-      --topology "${topology}" \
-      --leaves "${leaves}" \
-      --sites "${sites}" \
-      --repeats "${repeats}"
+if [[ "${TREE_HMM_SKIP_BENCHMARKS:-0}" != "1" ]]; then
+  echo "=== CUDA scaling benchmark ==="
+  cases=(
+    "64 256"
+    "256 256"
+    "1024 256"
+    "4096 256"
+    "4096 1024"
+    "16384 256"
+    "65536 64"
+  )
+  for topology in balanced caterpillar; do
+    for specification in "${cases[@]}"; do
+      read -r leaves sites <<< "${specification}"
+      bazel-bin/cuda_benchmark \
+        --topology "${topology}" \
+        --leaves "${leaves}" \
+        --sites "${sites}" \
+        --repeats "${repeats}"
+    done
   done
-done
 
-if [[ "${TREE_HMM_SKIP_FISH_TREE:-0}" != "1" ]]; then
-  echo "=== Fish Tree of Life public-data benchmark ==="
-  fish_dir="${notebook_work_dir}/fish_tree_of_life"
-  bash "${repo_dir}/scripts/fetch_fish_tree.sh" "${fish_dir}"
-  for site_batch in 256 1024 4096; do
-    bazel-bin/cuda_benchmark \
-      --newick "${fish_dir}/actinopt_12k_raxml.tre" \
-      --phylip "${fish_dir}/final_alignment.phylip" \
-      --site-batch "${site_batch}" \
-      --repeats 1
-  done
+  if [[ "${TREE_HMM_SKIP_FISH_TREE:-0}" != "1" ]]; then
+    echo "=== Fish Tree of Life public-data benchmark ==="
+    fish_dir="${notebook_work_dir}/fish_tree_of_life"
+    bash "${repo_dir}/scripts/fetch_fish_tree.sh" "${fish_dir}"
+    for site_batch in 256 1024 4096; do
+      bazel-bin/cuda_benchmark \
+        --newick "${fish_dir}/actinopt_12k_raxml.tre" \
+        --phylip "${fish_dir}/final_alignment.phylip" \
+        --site-batch "${site_batch}" \
+        --repeats 1
+    done
+  fi
 fi

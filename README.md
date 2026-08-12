@@ -17,6 +17,8 @@ The current implementation provides:
 
 - JC69 likelihoods and log likelihoods on arbitrary rooted trees;
 - node and edge posterior probabilities for individual sites;
+- accelerator ancestral-state marginals, joint MAP assignments, and posterior
+  samples for alignments;
 - batched alignment conversion for the generic tree-HMM accelerator API;
 - conventional scaled Felsenstein pruning as an independent CPU baseline;
 - Newick and nucleotide FASTA input;
@@ -50,6 +52,27 @@ device argument. CUDA stages compact categorical observations; Metal writes
 dense factors directly into shared host/device storage. Both call the same
 backend-neutral tree-HMM contraction executor, and repeated prepared calls do
 not resize numerical workspace storage or reconstruct the topology plan.
+
+Recovery uses operation-specific workspaces so likelihood-only evaluations do
+not retain unnecessary reverse-pass data. For example, posterior marginals for
+a bounded site batch are evaluated as follows:
+
+```cpp
+workspace.ReserveMarginals(model, 4096);
+for (std::size_t first = 0; first < model.sites; first += 4096) {
+  const auto batch = parallel_phylogenetics::SelectSites(
+      model, first, std::min<std::size_t>(4096, model.sites - first));
+  const parallel_phylogenetics::AlignmentPosteriorView posterior =
+      parallel_phylogenetics::cuda::PosteriorMarginalsPrepared(batch,
+                                                                workspace);
+  // Consume this batch before reusing workspace.
+}
+```
+
+`MaximumAPosterioriPrepared` has the same batching convention.
+`PosteriorSamplePrepared` additionally accepts one caller-provided uniform
+variate per site and node, making posterior draws reproducible without
+embedding a random-number generator in the inference package.
 
 ## Build and test
 

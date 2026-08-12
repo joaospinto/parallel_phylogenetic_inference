@@ -15,5 +15,19 @@ int main() {
         workspace.Reserve(model, batch);
       },
       parallel_phylogenetics::metal::LogLikelihoodsPrepared);
+  parallel_phylogenetics::test::TestRecoveryAccelerator(
+      workspace,
+      [&](parallel_phylogenetics::AlignmentModelView model, std::size_t batch) {
+        workspace.ReserveMaximum(model, batch);
+      },
+      parallel_phylogenetics::metal::MaximumAPosterioriPrepared,
+      [&](parallel_phylogenetics::AlignmentModelView model, std::size_t batch) {
+        workspace.ReserveSampling(model, batch);
+      },
+      parallel_phylogenetics::metal::PosteriorSamplePrepared,
+      [&](parallel_phylogenetics::AlignmentModelView model, std::size_t batch) {
+        workspace.ReserveMarginals(model, batch);
+      },
+      parallel_phylogenetics::metal::PosteriorMarginalsPrepared);
   return 0;
 }
