@@ -10,6 +10,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -195,6 +196,27 @@ std::string RecordName(std::string_view header) {
   return std::string(header.substr(first, last - first));
 }
 
+void ValidateAlignment(const SequenceAlignment &alignment,
+                       std::string_view format) {
+  if (alignment.records.empty())
+    throw std::invalid_argument(std::string(format) +
+                                " input contains no records");
+  if (alignment.sites == 0)
+    throw std::invalid_argument(std::string(format) +
+                                " sequences must not be empty");
+  std::map<std::string, bool> names;
+  for (const SequenceRecord &record : alignment.records) {
+    if (record.sequence.size() != alignment.sites) {
+      throw std::invalid_argument("all " + std::string(format) +
+                                  " sequences must have equal length");
+    }
+    if (!names.emplace(record.name, true).second) {
+      throw std::invalid_argument("duplicate " + std::string(format) +
+                                  " record name " + record.name);
+    }
+  }
+}
+
 Nucleotide Decode(char character) {
   switch (
       static_cast<char>(std::toupper(static_cast<unsigned char>(character)))) {
@@ -271,20 +293,75 @@ SequenceAlignment ParseFasta(std::string_view text) {
   if (result.records.empty())
     throw std::invalid_argument("the FASTA input contains no records");
   result.sites = result.records.front().sequence.size();
-  if (result.sites == 0)
-    throw std::invalid_argument("FASTA sequences must not be empty");
-  std::map<std::string, bool> names;
-  for (const SequenceRecord &record : result.records) {
-    if (record.sequence.size() != result.sites)
-      throw std::invalid_argument("all FASTA sequences must have equal length");
-    if (!names.emplace(record.name, true).second)
-      throw std::invalid_argument("duplicate FASTA record name " + record.name);
-  }
+  ValidateAlignment(result, "FASTA");
   return result;
 }
 
 SequenceAlignment LoadFasta(const std::filesystem::path &path) {
   return ParseFasta(ReadFile(path));
+}
+
+SequenceAlignment ParsePhylip(std::string_view text) {
+  const std::size_t header_end = text.find('\n');
+  if (header_end == std::string_view::npos)
+    throw std::invalid_argument("PHYLIP input has no sequence records");
+  std::string_view header = text.substr(0, header_end);
+  if (!header.empty() && header.back() == '\r')
+    header.remove_suffix(1);
+  std::size_t expected_records = 0;
+  std::size_t expected_sites = 0;
+  {
+    std::istringstream stream{std::string(header)};
+    std::string trailing;
+    if (!(stream >> expected_records >> expected_sites) ||
+        (stream >> trailing) || expected_records == 0 || expected_sites == 0) {
+      throw std::invalid_argument(
+          "PHYLIP header must contain positive record and site counts");
+    }
+  }
+
+  SequenceAlignment result;
+  result.sites = expected_sites;
+  result.records.reserve(expected_records);
+  std::size_t position = header_end + 1;
+  while (position <= text.size()) {
+    const std::size_t end = text.find('\n', position);
+    const std::size_t line_end =
+        end == std::string_view::npos ? text.size() : end;
+    std::string_view line = text.substr(position, line_end - position);
+    if (!line.empty() && line.back() == '\r')
+      line.remove_suffix(1);
+    const std::size_t name_begin = line.find_first_not_of(" \t");
+    if (name_begin != std::string_view::npos) {
+      const std::size_t name_end = line.find_first_of(" \t", name_begin);
+      if (name_end == std::string_view::npos)
+        throw std::invalid_argument("PHYLIP record has no sequence");
+      SequenceRecord record{
+          std::string(line.substr(name_begin, name_end - name_begin)), {}};
+      record.sequence.reserve(expected_sites);
+      for (const char character : line.substr(name_end)) {
+        if (std::isspace(static_cast<unsigned char>(character)))
+          continue;
+        static_cast<void>(Decode(character));
+        record.sequence.push_back(static_cast<char>(
+            std::toupper(static_cast<unsigned char>(character))));
+      }
+      result.records.push_back(std::move(record));
+    }
+    if (end == std::string_view::npos)
+      break;
+    position = end + 1;
+  }
+  if (result.records.size() != expected_records) {
+    throw std::invalid_argument(
+        "PHYLIP record count does not match its header");
+  }
+  ValidateAlignment(result, "PHYLIP");
+  return result;
+}
+
+SequenceAlignment LoadPhylip(const std::filesystem::path &path) {
+  return ParsePhylip(ReadFile(path));
 }
 
 EncodedAlignment EncodeAlignment(const Phylogeny &phylogeny,
@@ -303,8 +380,6 @@ EncodedAlignment EncodeAlignment(const Phylogeny &phylogeny,
 
   EncodedAlignment result;
   result.sites = alignment.sites;
-  result.observations.assign(alignment.sites * phylogeny.plan.num_nodes(),
-                             Nucleotide::kUnknown);
   std::map<std::string, bool> leaf_labels;
   for (std::size_t node = 0; node < phylogeny.plan.num_nodes(); ++node) {
     if (out_degree[node] != 0)
@@ -318,14 +393,21 @@ EncodedAlignment EncodeAlignment(const Phylogeny &phylogeny,
     if (sequence == sequences.end())
       throw std::invalid_argument("no FASTA record matches leaf " + label);
     used[record_indices.at(label)] = true;
-    for (std::size_t site = 0; site < alignment.sites; ++site) {
-      result.observations[site * phylogeny.plan.num_nodes() + node] =
-          Decode((*sequence->second)[site]);
-    }
+    result.observation_nodes.push_back(static_cast<btrc::Index>(node));
   }
   if (std::find(used.begin(), used.end(), false) != used.end()) {
     throw std::invalid_argument(
         "the FASTA input contains a record absent from the phylogeny");
+  }
+  result.observations.resize(alignment.sites * result.observation_nodes.size());
+  for (std::size_t index = 0; index < result.observation_nodes.size();
+       ++index) {
+    const btrc::Index node = result.observation_nodes[index];
+    const std::string &sequence = *sequences.at(phylogeny.labels[node]);
+    for (std::size_t site = 0; site < alignment.sites; ++site) {
+      result.observations[site * result.observation_nodes.size() + index] =
+          Decode(sequence[site]);
+    }
   }
   return result;
 }

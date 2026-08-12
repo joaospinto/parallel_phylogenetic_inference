@@ -55,11 +55,19 @@ bazel run --config=cuda --cuda_archs=sm_75 //:cuda_benchmark -- \
   --topology balanced --leaves 4096 --sites 1024 --repeats 5
 ```
 
-Both benchmark binaries also accept an empirical nucleotide data set:
+Both benchmark binaries accept empirical FASTA or relaxed sequential PHYLIP
+alignments:
 
 ```sh
 bazel run //:metal_benchmark -- \
   --newick family.nwk --fasta family.fasta --repeats 5
+```
+
+Long alignments can be evaluated in a capacity-bounded prepared workspace:
+
+```sh
+bazel run //:metal_benchmark -- \
+  --newick tree.nwk --phylip alignment.phy --site-batch 1024 --repeats 5
 ```
 
 Warmup and workspace allocation are excluded. CPU and accelerator execution
@@ -83,6 +91,12 @@ extractor accepts family, leaf-count, and result-count filters; run
 `scripts/extract_pandit.py --help` for details. Downloaded data are ignored by
 Git and retain the terms of the [PANDIT data
 license](https://www.ebi.ac.uk/goldman-srv/pandit/Pandit/data/COPYRIGHT).
+
+The Fish Tree of Life supplies a much larger empirical nucleotide case with
+11,638 taxa and 24,143 sites. `scripts/fetch_fish_tree.sh` downloads and
+checksum-verifies its published RAxML tree and full alignment. The CUDA
+notebook evaluates the complete alignment at several prepared site-batch
+capacities; it does not truncate or replicate the data.
 
 ## Reproducible accelerator runs
 

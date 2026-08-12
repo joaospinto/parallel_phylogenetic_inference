@@ -119,14 +119,14 @@ int main() {
     Check(Near(sum, 1.0));
   }
 
-  const std::vector<N> alignment_observations{
-      N::kUnknown, N::kUnknown, N::kUnknown, N::kUnknown, N::kA, N::kG, N::kT,
-      N::kUnknown, N::kUnknown, N::kUnknown, N::kUnknown, N::kC, N::kC, N::kA,
-  };
+  const std::vector<btrc::Index> observation_nodes{4, 5, 6};
+  const std::vector<N> alignment_observations{N::kA, N::kG, N::kT,
+                                              N::kC, N::kC, N::kA};
   parallel_phylogenetics::AlignmentWorkspace alignment_workspace;
   alignment_workspace.Reserve(plan, 2);
   const tree_hmm::BatchedModelView prepared = parallel_phylogenetics::Prepare(
-      {plan, 2, lengths, alignment_observations, frequencies, 1.0},
+      {plan, 2, lengths, observation_nodes, alignment_observations, frequencies,
+       1.0},
       alignment_workspace);
   Check(prepared.batch == 2);
   Check(prepared.states == 4);
@@ -135,7 +135,8 @@ int main() {
   tree_hmm::MutableBatchedModelView direct_destination{plan, 4, 2, direct_nodes,
                                                        direct_edges};
   const tree_hmm::BatchedModelView direct = parallel_phylogenetics::Prepare(
-      {plan, 2, lengths, alignment_observations, frequencies, 1.0},
+      {plan, 2, lengths, observation_nodes, alignment_observations, frequencies,
+       1.0},
       direct_destination);
   Check(std::equal(prepared.node_potentials.begin(),
                    prepared.node_potentials.end(),
@@ -147,7 +148,8 @@ int main() {
   sequential_workspace.Reserve(plan, 2);
   const std::span<const double> sequential =
       parallel_phylogenetics::LogLikelihoodsPrepared(
-          {plan, 2, lengths, alignment_observations, frequencies, 1.0},
+          {plan, 2, lengths, observation_nodes, alignment_observations,
+           frequencies, 1.0},
           sequential_workspace);
   for (std::size_t site = 0; site < 2; ++site) {
     const std::size_t node_values = plan.num_nodes() * 4;
@@ -158,9 +160,11 @@ int main() {
                                    prepared.edge_potentials.end());
     const double prepared_log_likelihood =
         tree_hmm::LogPartitionFunction({plan, 4, site_nodes, site_edges});
-    const std::span<const N> site_observations(alignment_observations.data() +
-                                                   site * plan.num_nodes(),
-                                               plan.num_nodes());
+    std::vector<N> site_observations(plan.num_nodes(), N::kUnknown);
+    for (std::size_t index = 0; index < observation_nodes.size(); ++index) {
+      site_observations[observation_nodes[index]] =
+          alignment_observations[site * observation_nodes.size() + index];
+    }
     Check(Near(prepared_log_likelihood,
                parallel_phylogenetics::SiteLogLikelihood(
                    {plan, lengths, site_observations, frequencies, 1.0}),
@@ -171,13 +175,16 @@ int main() {
   g_count_allocations = true;
   for (int repeat = 0; repeat < 10; ++repeat) {
     static_cast<void>(parallel_phylogenetics::Prepare(
-        {plan, 2, lengths, alignment_observations, frequencies, 1.0},
+        {plan, 2, lengths, observation_nodes, alignment_observations,
+         frequencies, 1.0},
         alignment_workspace));
     static_cast<void>(parallel_phylogenetics::Prepare(
-        {plan, 2, lengths, alignment_observations, frequencies, 1.0},
+        {plan, 2, lengths, observation_nodes, alignment_observations,
+         frequencies, 1.0},
         direct_destination));
     static_cast<void>(parallel_phylogenetics::LogLikelihoodsPrepared(
-        {plan, 2, lengths, alignment_observations, frequencies, 1.0},
+        {plan, 2, lengths, observation_nodes, alignment_observations,
+         frequencies, 1.0},
         sequential_workspace));
   }
   g_count_allocations = false;
@@ -201,6 +208,14 @@ int main() {
   const parallel_phylogenetics::EncodedAlignment encoded =
       parallel_phylogenetics::EncodeAlignment(parsed_tree, parsed_alignment);
   Check(encoded.sites == 3);
+  Check(encoded.observation_nodes.size() == 3);
   Check(encoded.observations.size() ==
-        encoded.sites * parsed_tree.plan.num_nodes());
+        encoded.sites * encoded.observation_nodes.size());
+
+  const parallel_phylogenetics::SequenceAlignment parsed_phylip =
+      parallel_phylogenetics::ParsePhylip("3 3\nA ACG\nB_taxon A-N\nC TCG\n");
+  Check(parsed_phylip.sites == 3);
+  Check(parsed_phylip.records.size() == 3);
+  Check(parsed_phylip.records[1].name == "B_taxon");
+  Check(parsed_phylip.records[1].sequence == "A-N");
 }

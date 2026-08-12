@@ -32,7 +32,9 @@ struct SequenceAlignment {
 
 struct EncodedAlignment {
   std::size_t sites = 0;
-  // [site, node], ready for AlignmentModelView.
+  // Strictly increasing observed node indices and [site, observed node]
+  // values, ready for AlignmentModelView.
+  std::vector<btrc::Index> observation_nodes;
   std::vector<Nucleotide> observations;
 };
 
@@ -41,6 +43,11 @@ Phylogeny LoadNewick(const std::filesystem::path &path);
 
 SequenceAlignment ParseFasta(std::string_view text);
 SequenceAlignment LoadFasta(const std::filesystem::path &path);
+
+// Parses relaxed sequential PHYLIP: the header gives record and site counts,
+// and each following nonempty line contains one name and its full sequence.
+SequenceAlignment ParsePhylip(std::string_view text);
+SequenceAlignment LoadPhylip(const std::filesystem::path &path);
 
 // Matches FASTA record names to leaf labels. Standard IUPAC ambiguity codes,
 // gaps, and '?' are represented as unknown observations.

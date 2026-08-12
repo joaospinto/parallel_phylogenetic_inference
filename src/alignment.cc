@@ -57,10 +57,23 @@ void ValidateProbabilities(const std::array<double, 4> &frequencies) {
 void ValidateModel(AlignmentModelView model) {
   if (model.branch_lengths.size() != model.plan.num_edges())
     throw std::invalid_argument("one branch length is required per plan edge");
-  const std::size_t expected_observations =
-      CheckedProduct({model.sites, model.plan.num_nodes()}, "observations");
+  const std::size_t expected_observations = CheckedProduct(
+      {model.sites, model.observation_nodes.size()}, "observations");
   if (model.observations.size() != expected_observations)
     throw std::invalid_argument("alignment observations have the wrong shape");
+  if (model.observation_nodes.empty())
+    throw std::invalid_argument("an alignment must observe at least one node");
+  btrc::Index previous = 0;
+  bool first = true;
+  for (const btrc::Index node : model.observation_nodes) {
+    if (node >= model.plan.num_nodes() || (!first && node <= previous)) {
+      throw std::invalid_argument(
+          "alignment observation nodes must be valid and strictly "
+          "increasing");
+    }
+    previous = node;
+    first = false;
+  }
   if (!(model.substitution_rate >= 0.0) ||
       !std::isfinite(model.substitution_rate)) {
     throw std::invalid_argument(
@@ -91,9 +104,11 @@ FillFactors(AlignmentModelView model,
     std::transform(model.root_frequencies.begin(), model.root_frequencies.end(),
                    root,
                    [](double value) { return static_cast<float>(value); });
-    for (std::size_t node = 0; node < model.plan.num_nodes(); ++node) {
+    for (std::size_t index = 0; index < model.observation_nodes.size();
+         ++index) {
+      const btrc::Index node = model.observation_nodes[index];
       const Nucleotide observation =
-          model.observations[site * model.plan.num_nodes() + node];
+          model.observations[site * model.observation_nodes.size() + index];
       if (observation == Nucleotide::kUnknown)
         continue;
       const int observed_state = static_cast<int>(observation);
@@ -232,9 +247,11 @@ std::span<const double> LogLikelihoodsPrepared(AlignmentModelView model,
     double *root = site_partials + model.plan.root() * 4;
     std::copy(model.root_frequencies.begin(), model.root_frequencies.end(),
               root);
-    for (std::size_t node = 0; node < model.plan.num_nodes(); ++node) {
+    for (std::size_t index = 0; index < model.observation_nodes.size();
+         ++index) {
+      const btrc::Index node = model.observation_nodes[index];
       const Nucleotide observation =
-          model.observations[site * model.plan.num_nodes() + node];
+          model.observations[site * model.observation_nodes.size() + index];
       if (observation == Nucleotide::kUnknown)
         continue;
       const int observed_state = static_cast<int>(observation);

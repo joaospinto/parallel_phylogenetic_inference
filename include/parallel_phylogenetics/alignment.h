@@ -16,7 +16,10 @@ struct AlignmentModelView {
   const btrc::Plan &plan;
   std::size_t sites;
   std::span<const double> branch_lengths;
-  // [site, node]. Unobserved internal nodes use kUnknown.
+  // Strictly increasing node indices. Phylogenetic alignments ordinarily list
+  // the tips, but internal observations are also supported.
+  std::span<const btrc::Index> observation_nodes;
+  // [site, observation_nodes index].
   std::span<const Nucleotide> observations;
   std::array<double, 4> root_frequencies{0.25, 0.25, 0.25, 0.25};
   double substitution_rate = 1.0;

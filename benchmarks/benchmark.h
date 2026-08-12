@@ -27,15 +27,18 @@ using Clock = std::chrono::steady_clock;
 struct Options {
   std::size_t leaves = 1024;
   std::size_t sites = 256;
+  std::size_t site_batch = 0;
   int repeats = 5;
   std::string topology = "balanced";
   std::optional<std::filesystem::path> newick;
   std::optional<std::filesystem::path> fasta;
+  std::optional<std::filesystem::path> phylip;
 };
 
 struct Problem {
   btrc::Plan plan;
   std::vector<double> branch_lengths;
+  std::vector<btrc::Index> observation_nodes;
   std::vector<Nucleotide> observations;
   std::string dataset;
   std::string topology;
@@ -64,6 +67,8 @@ inline Options ParseOptions(int argc, char **argv) {
       options.leaves = ParseSize(argv[index], "leaf count");
     } else if (option == "--sites") {
       options.sites = ParseSize(argv[index], "site count");
+    } else if (option == "--site-batch") {
+      options.site_batch = ParseSize(argv[index], "site batch size");
     } else if (option == "--repeats") {
       const std::size_t repeats = ParseSize(argv[index], "repeat count");
       if (repeats > static_cast<std::size_t>(std::numeric_limits<int>::max()))
@@ -79,20 +84,29 @@ inline Options ParseOptions(int argc, char **argv) {
       options.newick = argv[index];
     } else if (option == "--fasta") {
       options.fasta = argv[index];
+    } else if (option == "--phylip") {
+      options.phylip = argv[index];
     } else {
       throw std::invalid_argument("unknown option " + std::string(option));
     }
   }
-  if (options.newick.has_value() != options.fasta.has_value())
+  if (options.fasta.has_value() && options.phylip.has_value())
+    throw std::invalid_argument("--fasta and --phylip are alternatives");
+  const bool has_alignment =
+      options.fasta.has_value() || options.phylip.has_value();
+  if (options.newick.has_value() != has_alignment)
     throw std::invalid_argument(
-        "--newick and --fasta must be supplied together");
+        "--newick and exactly one of --fasta or --phylip must be supplied "
+        "together");
   return options;
 }
 
 inline Problem MakeProblem(const Options &options) {
   if (options.newick.has_value()) {
     Phylogeny phylogeny = LoadNewick(*options.newick);
-    const SequenceAlignment alignment = LoadFasta(*options.fasta);
+    const SequenceAlignment alignment = options.fasta.has_value()
+                                            ? LoadFasta(*options.fasta)
+                                            : LoadPhylip(*options.phylip);
     EncodedAlignment encoded = EncodeAlignment(phylogeny, alignment);
     std::vector<std::size_t> out_degree(phylogeny.plan.num_nodes(), 0);
     for (const btrc::Index parent : phylogeny.plan.edge_parents())
@@ -101,6 +115,7 @@ inline Problem MakeProblem(const Options &options) {
         std::count(out_degree.begin(), out_degree.end(), std::size_t{0}));
     return {std::move(phylogeny.plan),
             std::move(phylogeny.branch_lengths),
+            std::move(encoded.observation_nodes),
             std::move(encoded.observations),
             options.newick->stem().string(),
             "empirical",
@@ -140,17 +155,20 @@ inline Problem MakeProblem(const Options &options) {
   for (std::size_t edge = 0; edge < lengths.size(); ++edge)
     lengths[edge] = 0.02 + 0.001 * static_cast<double>(edge % 29);
 
-  std::vector<Nucleotide> observations(sites * nodes, Nucleotide::kUnknown);
   const std::size_t first_leaf = leaves - 1;
+  std::vector<btrc::Index> observation_nodes(leaves);
+  for (std::size_t leaf = 0; leaf < leaves; ++leaf)
+    observation_nodes[leaf] = static_cast<btrc::Index>(first_leaf + leaf);
+  std::vector<Nucleotide> observations(sites * leaves);
   for (std::size_t site = 0; site < sites; ++site) {
     for (std::size_t leaf = 0; leaf < leaves; ++leaf) {
       const std::size_t state = (site * 17 + leaf * 13 + (site ^ leaf)) % 4;
-      observations[site * nodes + first_leaf + leaf] =
-          static_cast<Nucleotide>(state);
+      observations[site * leaves + leaf] = static_cast<Nucleotide>(state);
     }
   }
   return {std::move(plan),
           std::move(lengths),
+          std::move(observation_nodes),
           std::move(observations),
           "synthetic",
           options.topology,
@@ -172,7 +190,8 @@ inline double Milliseconds(Clock::time_point begin, Clock::time_point end) {
 
 struct BenchmarkResult {
   std::vector<double> cpu_values;
-  tree_hmm::PartitionView accelerator;
+  std::vector<float> accelerator_values;
+  tree_hmm::AcceleratorTimings accelerator_timings;
   double cpu_ms = 0.0;
   double prepare_ms = 0.0;
   double total_accelerator_ms = 0.0;
@@ -244,7 +263,157 @@ BenchmarkResult RunInterleaved(AlignmentModelView model, int repeats,
   accelerator_result.timings.kernel_ms = Median(kernel_times);
   accelerator_result.timings.download_ms = Median(download_times);
   return {std::vector<double>(cpu_values.begin(), cpu_values.end()),
-          accelerator_result, Median(cpu_times), Median(prepare_times),
+          std::vector<float>(accelerator_result.values.begin(),
+                             accelerator_result.values.end()),
+          accelerator_result.timings,
+          Median(cpu_times),
+          Median(prepare_times),
+          Median(total_times)};
+}
+
+inline AlignmentModelView SiteBatch(AlignmentModelView model,
+                                    std::size_t first_site,
+                                    std::size_t site_count) {
+  return {
+      model.plan,
+      site_count,
+      model.branch_lengths,
+      model.observation_nodes,
+      model.observations.subspan(first_site * model.observation_nodes.size(),
+                                 site_count * model.observation_nodes.size()),
+      model.root_frequencies,
+      model.substitution_rate};
+}
+
+inline tree_hmm::MutableBatchedModelView
+BatchPrefix(tree_hmm::MutableBatchedModelView destination, std::size_t batch) {
+  if (batch == 0 || batch > destination.batch)
+    throw std::invalid_argument(
+        "requested batch exceeds the accelerator input capacity");
+  if (destination.node_potentials.size() % destination.batch != 0)
+    throw std::invalid_argument("accelerator input capacity has a wrong shape");
+  const std::size_t node_values =
+      batch * (destination.node_potentials.size() / destination.batch);
+  return {destination.plan, destination.states, batch,
+          destination.node_potentials.first(node_values),
+          destination.edge_potentials};
+}
+
+// Evaluates a complete alignment in fixed-size batches. The caller reserves
+// one accelerator workspace at the full batch capacity; its prefix is reused
+// for the tail, so neither execution path allocates while timing. Result
+// concatenation is deliberately outside the measured intervals because both
+// backends have already materialized those values.
+template <typename Accelerator>
+BenchmarkResult
+RunChunkedInterleaved(AlignmentModelView model, int repeats,
+                      std::size_t site_batch,
+                      tree_hmm::MutableBatchedModelView full_destination,
+                      Accelerator &&accelerator) {
+  if (site_batch == 0 || site_batch >= model.sites)
+    throw std::invalid_argument(
+        "chunked inference requires a batch smaller than the alignment");
+  const std::size_t remainder = model.sites % site_batch;
+  SequentialWorkspace full_cpu;
+  full_cpu.Reserve(model.plan, site_batch);
+  SequentialWorkspace tail_cpu;
+  if (remainder != 0)
+    tail_cpu.Reserve(model.plan, remainder);
+
+  const AlignmentModelView first = SiteBatch(model, 0, site_batch);
+  static_cast<void>(LogLikelihoodsPrepared(first, full_cpu));
+  static_cast<void>(accelerator(Prepare(first, full_destination)));
+  if (remainder != 0) {
+    const AlignmentModelView tail =
+        SiteBatch(model, model.sites - remainder, remainder);
+    static_cast<void>(LogLikelihoodsPrepared(tail, tail_cpu));
+    static_cast<void>(
+        accelerator(Prepare(tail, BatchPrefix(full_destination, remainder))));
+  }
+
+  std::vector<double> cpu_values(model.sites);
+  std::vector<float> accelerator_values(model.sites);
+  std::vector<double> cpu_times;
+  std::vector<double> prepare_times;
+  std::vector<double> wall_times;
+  std::vector<double> upload_times;
+  std::vector<double> kernel_times;
+  std::vector<double> download_times;
+  std::vector<double> total_times;
+  cpu_times.reserve(repeats);
+  prepare_times.reserve(repeats);
+  wall_times.reserve(repeats);
+  upload_times.reserve(repeats);
+  kernel_times.reserve(repeats);
+  download_times.reserve(repeats);
+  total_times.reserve(repeats);
+
+  const auto run_cpu = [&] {
+    double elapsed = 0.0;
+    for (std::size_t first_site = 0; first_site < model.sites;
+         first_site += site_batch) {
+      const std::size_t count = std::min(site_batch, model.sites - first_site);
+      const AlignmentModelView chunk = SiteBatch(model, first_site, count);
+      SequentialWorkspace &workspace =
+          count == site_batch ? full_cpu : tail_cpu;
+      const Clock::time_point begin = Clock::now();
+      const std::span<const double> values =
+          LogLikelihoodsPrepared(chunk, workspace);
+      elapsed += Milliseconds(begin, Clock::now());
+      std::copy(values.begin(), values.end(), cpu_values.begin() + first_site);
+    }
+    cpu_times.push_back(elapsed);
+  };
+
+  const auto run_accelerator = [&] {
+    double prepare_elapsed = 0.0;
+    double wall_elapsed = 0.0;
+    double upload_elapsed = 0.0;
+    double kernel_elapsed = 0.0;
+    double download_elapsed = 0.0;
+    double total_elapsed = 0.0;
+    for (std::size_t first_site = 0; first_site < model.sites;
+         first_site += site_batch) {
+      const std::size_t count = std::min(site_batch, model.sites - first_site);
+      const AlignmentModelView chunk = SiteBatch(model, first_site, count);
+      tree_hmm::MutableBatchedModelView destination =
+          BatchPrefix(full_destination, count);
+      const Clock::time_point total_begin = Clock::now();
+      const Clock::time_point prepare_begin = total_begin;
+      const tree_hmm::BatchedModelView factors = Prepare(chunk, destination);
+      prepare_elapsed += Milliseconds(prepare_begin, Clock::now());
+      const tree_hmm::PartitionView result = accelerator(factors);
+      total_elapsed += Milliseconds(total_begin, Clock::now());
+      wall_elapsed += result.timings.wall_ms;
+      upload_elapsed += result.timings.upload_ms;
+      kernel_elapsed += result.timings.kernel_ms;
+      download_elapsed += result.timings.download_ms;
+      std::copy(result.values.begin(), result.values.end(),
+                accelerator_values.begin() + first_site);
+    }
+    prepare_times.push_back(prepare_elapsed);
+    wall_times.push_back(wall_elapsed);
+    upload_times.push_back(upload_elapsed);
+    kernel_times.push_back(kernel_elapsed);
+    download_times.push_back(download_elapsed);
+    total_times.push_back(total_elapsed);
+  };
+
+  for (int repeat = 0; repeat < repeats; ++repeat) {
+    if (repeat % 2 == 0) {
+      run_cpu();
+      run_accelerator();
+    } else {
+      run_accelerator();
+      run_cpu();
+    }
+  }
+  return {std::move(cpu_values),
+          std::move(accelerator_values),
+          {Median(upload_times), Median(kernel_times), Median(download_times),
+           Median(wall_times)},
+          Median(cpu_times),
+          Median(prepare_times),
           Median(total_times)};
 }
 
@@ -282,8 +451,8 @@ inline void PrintHeader(const char *backend, const std::string &device,
             << "# topology=" << problem.topology << "-bifurcating-jc69\n"
             << "# prepared calls exclude workspace allocation and warmup\n"
             << "# CPU and accelerator execution order alternates by repeat\n"
-            << "backend,dataset,topology,leaves,nodes,sites,primitive_levels,"
-               "repeats,"
+            << "backend,dataset,topology,leaves,nodes,sites,site_batch,"
+               "primitive_levels,repeats,"
                "cpu_ms,prepare_ms,accelerator_wall_ms,upload_ms,kernel_ms,"
                "download_ms,total_accelerator_ms,wall_speedup,max_abs_error,"
                "max_relative_error\n";
@@ -292,18 +461,20 @@ inline void PrintHeader(const char *backend, const std::string &device,
 
 inline void PrintRow(const char *backend, const Options &options,
                      const Problem &problem, double cpu_ms, double prepare_ms,
-                     const tree_hmm::PartitionView &accelerator,
+                     const tree_hmm::AcceleratorTimings &accelerator,
                      double total_accelerator_ms, double absolute_error,
                      double relative_error) {
   const btrc::PlanStatistics statistics = btrc::Statistics(problem.plan);
   std::cout << std::setprecision(10) << backend << ',' << problem.dataset << ','
             << problem.topology << ',' << problem.leaves << ','
             << problem.plan.num_nodes() << ',' << problem.sites << ','
-            << statistics.primitive_levels << ',' << options.repeats << ','
-            << cpu_ms << ',' << prepare_ms << ',' << accelerator.timings.wall_ms
-            << ',' << accelerator.timings.upload_ms << ','
-            << accelerator.timings.kernel_ms << ','
-            << accelerator.timings.download_ms << ',' << total_accelerator_ms
+            << (options.site_batch == 0
+                    ? problem.sites
+                    : std::min(options.site_batch, problem.sites))
+            << ',' << statistics.primitive_levels << ',' << options.repeats
+            << ',' << cpu_ms << ',' << prepare_ms << ',' << accelerator.wall_ms
+            << ',' << accelerator.upload_ms << ',' << accelerator.kernel_ms
+            << ',' << accelerator.download_ms << ',' << total_accelerator_ms
             << ',' << cpu_ms / total_accelerator_ms << ',' << absolute_error
             << ',' << relative_error << '\n';
 }

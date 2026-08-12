@@ -121,3 +121,16 @@ for topology in balanced caterpillar; do
       --repeats "${repeats}"
   done
 done
+
+if [[ "${TREE_HMM_SKIP_FISH_TREE:-0}" != "1" ]]; then
+  echo "=== Fish Tree of Life public-data benchmark ==="
+  fish_dir="${notebook_work_dir}/fish_tree_of_life"
+  bash "${repo_dir}/scripts/fetch_fish_tree.sh" "${fish_dir}"
+  for site_batch in 256 1024 4096; do
+    bazel-bin/cuda_benchmark \
+      --newick "${fish_dir}/actinopt_12k_raxml.tre" \
+      --phylip "${fish_dir}/final_alignment.phylip" \
+      --site-batch "${site_batch}" \
+      --repeats 1
+  done
+fi
