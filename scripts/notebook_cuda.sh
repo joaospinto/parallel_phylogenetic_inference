@@ -81,23 +81,30 @@ cuda_args=(
 )
 echo "=== Native CUDA build and correctness test ==="
 "${bazel_command}" test "${cuda_args[@]}" --test_output=errors \
+  //:cuda_test \
   @parallel_tree_hmm//:cuda_test
-"${bazel_command}" build "${cuda_args[@]}" //:cuda_benchmark \
+"${bazel_command}" build "${cuda_args[@]}" //:cuda_benchmark //:cuda_test \
   @parallel_tree_hmm//:cuda_test
 
-native_test="$(find -L bazel-bin -type f -name cuda_test -perm -111 |
-  head -n 1)"
-if [[ -z "${native_test}" ]]; then
-  echo "could not locate the native CUDA test binary" >&2
-  exit 2
-fi
 if command -v compute-sanitizer >/dev/null 2>&1 &&
    [[ "${TREE_HMM_SKIP_SANITIZER:-0}" != "1" ]]; then
   read -r -a sanitizer_tools <<< \
     "${TREE_HMM_SANITIZER_TOOLS:-memcheck racecheck synccheck}"
-  for tool in "${sanitizer_tools[@]}"; do
-    echo "=== CUDA ${tool} ==="
-    compute-sanitizer --tool "${tool}" --error-exitcode 99 "${native_test}"
+  tree_hmm_native_test="$(find -L bazel-bin/external -type f \
+    -path '*parallel_tree_hmm*' -name cuda_test -perm -111 | head -n 1)"
+  native_tests=(
+    bazel-bin/cuda_test
+    "${tree_hmm_native_test}"
+  )
+  for native_test in "${native_tests[@]}"; do
+    if [[ ! -x "${native_test}" ]]; then
+      echo "could not locate ${native_test}" >&2
+      exit 2
+    fi
+    for tool in "${sanitizer_tools[@]}"; do
+      echo "=== CUDA ${tool}: ${native_test} ==="
+      compute-sanitizer --tool "${tool}" --error-exitcode 99 "${native_test}"
+    done
   done
 fi
 

@@ -3,8 +3,8 @@
 This repository implements phylogenetic likelihood and ancestral-state
 inference on top of two independent reusable packages:
 
-- [`parallel_tree_hmm`](../parallel_tree_hmm) supplies allocation-free hidden
-  Markov tree inference on CPU, Metal, and CUDA;
+- [`parallel_tree_hmm`](../parallel_tree_hmm) supplies prepared hidden Markov
+  tree inference on CPU, Metal, and CUDA;
 - [`bidirectional_tree_rake_compress`](../bidirectional_tree_rake_compress)
   supplies the topology planner and bidirectional rake–compress executor.
 
@@ -20,8 +20,9 @@ The current implementation provides:
 - batched alignment conversion for the generic tree-HMM accelerator API;
 - conventional scaled Felsenstein pruning as an independent CPU baseline;
 - Newick and nucleotide FASTA input;
-- prepared workspaces that allocate before, rather than during, repeated
-  likelihood evaluations;
+- preallocated numerical workspaces for repeated likelihood evaluations;
+- phylogenetics-facing CUDA and Metal workspaces that select the appropriate
+  tree-HMM representation and handle capacity-bounded site batches;
 - native Metal and CUDA benchmark executables with numerical cross-checks.
 
 Alignment conversion writes directly into caller-provided accelerator input
@@ -31,6 +32,24 @@ same generic tree-HMM call does not make a second full-batch staging copy.
 The accelerator kernels currently use FP32, while the conventional CPU
 baseline uses FP64. Every benchmark reports the maximum absolute discrepancy
 between their per-site log likelihoods.
+
+Applications do not need to prepare generic tree-HMM factors themselves. For
+example, a prepared CUDA evaluation is:
+
+```cpp
+#include "parallel_phylogenetics/cuda.h"
+
+parallel_phylogenetics::cuda::Workspace workspace;
+workspace.Reserve(model, 4096);
+std::span<const float> log_likelihoods =
+    parallel_phylogenetics::cuda::LogLikelihoodsPrepared(model, workspace);
+```
+
+The corresponding Metal interface differs only in the namespace and has no
+device argument. CUDA stages compact categorical observations; Metal writes
+dense factors directly into shared host/device storage. Both call the same
+backend-neutral tree-HMM contraction executor, and repeated prepared calls do
+not resize numerical workspace storage or reconstruct the topology plan.
 
 ## Build and test
 
