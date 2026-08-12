@@ -1,0 +1,259 @@
+#include "parallel_phylogenetics/alignment.h"
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <numeric>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+namespace parallel_phylogenetics {
+
+struct AlignmentWorkspace::Impl {
+  const btrc::Plan *plan = nullptr;
+  std::size_t sites = 0;
+  std::vector<float> nodes;
+  std::vector<float> edges;
+};
+
+struct SequentialWorkspace::Impl {
+  const btrc::Plan *plan = nullptr;
+  std::size_t sites = 0;
+  std::vector<btrc::Index> postorder;
+  std::vector<std::size_t> child_offsets;
+  std::vector<btrc::Index> child_edges;
+  std::vector<double> transitions;
+  std::vector<double> partials;
+  std::vector<double> log_scales;
+  std::vector<double> output;
+};
+
+namespace {
+
+std::size_t CheckedProduct(std::initializer_list<std::size_t> values,
+                           const char *description) {
+  std::size_t result = 1;
+  for (const std::size_t value : values) {
+    if (value != 0 && result > std::numeric_limits<std::size_t>::max() / value)
+      throw std::length_error(std::string(description) + " overflows size_t");
+    result *= value;
+  }
+  return result;
+}
+
+void ValidateProbabilities(const std::array<double, 4> &frequencies) {
+  const double sum =
+      std::accumulate(frequencies.begin(), frequencies.end(), 0.0);
+  if (!std::isfinite(sum) || std::abs(sum - 1.0) > 1e-12 ||
+      std::any_of(frequencies.begin(), frequencies.end(), [](double value) {
+        return !std::isfinite(value) || value < 0.0;
+      })) {
+    throw std::invalid_argument(
+        "root frequencies must be finite, nonnegative, and sum to one");
+  }
+}
+
+void Validate(AlignmentModelView model, const btrc::Plan *reserved_plan,
+              std::size_t reserved_sites, const char *workspace_name) {
+  if (reserved_plan != &model.plan || reserved_sites != model.sites) {
+    throw std::invalid_argument(
+        std::string("prepared alignment inference requires ") + workspace_name +
+        "::Reserve for this plan and site count");
+  }
+  if (model.branch_lengths.size() != model.plan.num_edges())
+    throw std::invalid_argument("one branch length is required per plan edge");
+  const std::size_t expected_observations =
+      CheckedProduct({model.sites, model.plan.num_nodes()}, "observations");
+  if (model.observations.size() != expected_observations)
+    throw std::invalid_argument("alignment observations have the wrong shape");
+  if (!(model.substitution_rate >= 0.0) ||
+      !std::isfinite(model.substitution_rate)) {
+    throw std::invalid_argument(
+        "the substitution rate must be finite and nonnegative");
+  }
+  ValidateProbabilities(model.root_frequencies);
+}
+
+} // namespace
+
+AlignmentWorkspace::AlignmentWorkspace() : impl_(std::make_unique<Impl>()) {}
+AlignmentWorkspace::~AlignmentWorkspace() = default;
+AlignmentWorkspace::AlignmentWorkspace(AlignmentWorkspace &&) noexcept =
+    default;
+AlignmentWorkspace &
+AlignmentWorkspace::operator=(AlignmentWorkspace &&) noexcept = default;
+
+void AlignmentWorkspace::Reserve(const btrc::Plan &plan, std::size_t sites) {
+  if (sites == 0)
+    throw std::invalid_argument("an alignment must contain at least one site");
+  Impl &storage = *impl_;
+  storage.plan = &plan;
+  storage.sites = sites;
+  storage.nodes.resize(CheckedProduct({sites, plan.num_nodes(), std::size_t{4}},
+                                      "alignment node factors"));
+  storage.edges.resize(CheckedProduct({plan.num_edges(), std::size_t{16}},
+                                      "alignment edge factors"));
+}
+
+tree_hmm::BatchedModelView Prepare(AlignmentModelView model,
+                                   AlignmentWorkspace &workspace) {
+  AlignmentWorkspace::Impl &storage = *workspace.impl_;
+  Validate(model, storage.plan, storage.sites, "AlignmentWorkspace");
+
+  std::fill(storage.nodes.begin(), storage.nodes.end(), 1.0f);
+  for (std::size_t site = 0; site < model.sites; ++site) {
+    float *root = storage.nodes.data() +
+                  (site * model.plan.num_nodes() + model.plan.root()) * 4;
+    std::transform(model.root_frequencies.begin(), model.root_frequencies.end(),
+                   root,
+                   [](double value) { return static_cast<float>(value); });
+    for (std::size_t node = 0; node < model.plan.num_nodes(); ++node) {
+      const Nucleotide observation =
+          model.observations[site * model.plan.num_nodes() + node];
+      if (observation == Nucleotide::kUnknown)
+        continue;
+      const int observed_state = static_cast<int>(observation);
+      if (observed_state < 0 || observed_state >= 4)
+        throw std::invalid_argument("invalid nucleotide observation");
+      float *factor =
+          storage.nodes.data() + (site * model.plan.num_nodes() + node) * 4;
+      for (int state = 0; state < 4; ++state) {
+        if (state != observed_state)
+          factor[state] = 0.0f;
+      }
+    }
+  }
+
+  for (std::size_t edge = 0; edge < model.plan.num_edges(); ++edge) {
+    const std::array<double, 16> transition = JukesCantorTransition(
+        model.branch_lengths[edge], model.substitution_rate);
+    std::transform(transition.begin(), transition.end(),
+                   storage.edges.begin() + edge * 16,
+                   [](double value) { return static_cast<float>(value); });
+  }
+  return {model.plan, 4, model.sites, storage.nodes, storage.edges};
+}
+
+SequentialWorkspace::SequentialWorkspace() : impl_(std::make_unique<Impl>()) {}
+SequentialWorkspace::~SequentialWorkspace() = default;
+SequentialWorkspace::SequentialWorkspace(SequentialWorkspace &&) noexcept =
+    default;
+SequentialWorkspace &
+SequentialWorkspace::operator=(SequentialWorkspace &&) noexcept = default;
+
+void SequentialWorkspace::Reserve(const btrc::Plan &plan, std::size_t sites) {
+  if (sites == 0)
+    throw std::invalid_argument("an alignment must contain at least one site");
+  Impl &storage = *impl_;
+  storage.plan = &plan;
+  storage.sites = sites;
+  storage.child_offsets.assign(plan.num_nodes() + 1, 0);
+  for (const btrc::Index parent : plan.edge_parents())
+    ++storage.child_offsets[parent + 1];
+  std::partial_sum(storage.child_offsets.begin(), storage.child_offsets.end(),
+                   storage.child_offsets.begin());
+  storage.child_edges.resize(plan.num_edges());
+  std::vector<std::size_t> cursor(storage.child_offsets.begin(),
+                                  storage.child_offsets.end() - 1);
+  for (std::size_t edge = 0; edge < plan.num_edges(); ++edge) {
+    const btrc::Index parent = plan.edge_parents()[edge];
+    storage.child_edges[cursor[parent]++] = static_cast<btrc::Index>(edge);
+  }
+
+  storage.postorder.clear();
+  storage.postorder.reserve(plan.num_nodes());
+  std::vector<btrc::Index> stack{plan.root()};
+  while (!stack.empty()) {
+    const btrc::Index node = stack.back();
+    stack.pop_back();
+    storage.postorder.push_back(node);
+    for (std::size_t index = storage.child_offsets[node];
+         index < storage.child_offsets[node + 1]; ++index) {
+      stack.push_back(plan.edge_children()[storage.child_edges[index]]);
+    }
+  }
+  std::reverse(storage.postorder.begin(), storage.postorder.end());
+  storage.transitions.resize(plan.num_edges() * 16);
+  storage.partials.resize(CheckedProduct(
+      {sites, plan.num_nodes(), std::size_t{4}}, "sequential partials"));
+  storage.log_scales.resize(
+      CheckedProduct({sites, plan.num_nodes()}, "sequential scales"));
+  storage.output.resize(sites);
+}
+
+std::span<const double> LogLikelihoodsPrepared(AlignmentModelView model,
+                                               SequentialWorkspace &workspace) {
+  SequentialWorkspace::Impl &storage = *workspace.impl_;
+  Validate(model, storage.plan, storage.sites, "SequentialWorkspace");
+  for (std::size_t edge = 0; edge < model.plan.num_edges(); ++edge) {
+    const std::array<double, 16> transition = JukesCantorTransition(
+        model.branch_lengths[edge], model.substitution_rate);
+    std::copy(transition.begin(), transition.end(),
+              storage.transitions.begin() + edge * 16);
+  }
+  std::fill(storage.partials.begin(), storage.partials.end(), 1.0);
+  std::fill(storage.log_scales.begin(), storage.log_scales.end(), 0.0);
+
+  for (std::size_t site = 0; site < model.sites; ++site) {
+    double *site_partials =
+        storage.partials.data() + site * model.plan.num_nodes() * 4;
+    double *root = site_partials + model.plan.root() * 4;
+    std::copy(model.root_frequencies.begin(), model.root_frequencies.end(),
+              root);
+    for (std::size_t node = 0; node < model.plan.num_nodes(); ++node) {
+      const Nucleotide observation =
+          model.observations[site * model.plan.num_nodes() + node];
+      if (observation == Nucleotide::kUnknown)
+        continue;
+      const int observed_state = static_cast<int>(observation);
+      if (observed_state < 0 || observed_state >= 4)
+        throw std::invalid_argument("invalid nucleotide observation");
+      double *factor = site_partials + node * 4;
+      for (int state = 0; state < 4; ++state) {
+        if (state != observed_state)
+          factor[state] = 0.0;
+      }
+    }
+
+    double *site_scales =
+        storage.log_scales.data() + site * model.plan.num_nodes();
+    for (const btrc::Index node : storage.postorder) {
+      double input_scale = 0.0;
+      double *partial = site_partials + node * 4;
+      for (std::size_t child_index = storage.child_offsets[node];
+           child_index < storage.child_offsets[node + 1]; ++child_index) {
+        const btrc::Index edge = storage.child_edges[child_index];
+        const btrc::Index child = model.plan.edge_children()[edge];
+        const double *child_partial = site_partials + child * 4;
+        const double *transition = storage.transitions.data() + edge * 16;
+        for (std::size_t parent_state = 0; parent_state < 4; ++parent_state) {
+          double message = 0.0;
+          for (std::size_t child_state = 0; child_state < 4; ++child_state) {
+            message += transition[parent_state * 4 + child_state] *
+                       child_partial[child_state];
+          }
+          partial[parent_state] *= message;
+        }
+        input_scale += site_scales[child];
+      }
+      const double maximum = *std::max_element(partial, partial + 4);
+      if (maximum > 0.0) {
+        for (std::size_t state = 0; state < 4; ++state)
+          partial[state] /= maximum;
+        site_scales[node] = input_scale + std::log(maximum);
+      } else {
+        site_scales[node] = -std::numeric_limits<double>::infinity();
+      }
+    }
+    const double *root_partial = site_partials + model.plan.root() * 4;
+    const double root_sum =
+        std::accumulate(root_partial, root_partial + 4, 0.0);
+    storage.output[site] =
+        root_sum > 0.0 ? site_scales[model.plan.root()] + std::log(root_sum)
+                       : -std::numeric_limits<double>::infinity();
+  }
+  return storage.output;
+}
+
+} // namespace parallel_phylogenetics

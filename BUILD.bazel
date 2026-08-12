@@ -1,10 +1,25 @@
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
+load("@rules_cuda//cuda:defs.bzl", "requires_cuda")
+
+config_setting(
+    name = "macos",
+    constraint_values = ["@platforms//os:osx"],
+)
 
 cc_library(
     name = "parallel_phylogenetics",
-    srcs = ["src/likelihood.cc"],
-    hdrs = ["include/parallel_phylogenetics/likelihood.h"],
+    srcs = [
+        "src/alignment.cc",
+        "src/io.cc",
+        "src/likelihood.cc",
+    ],
+    hdrs = [
+        "include/parallel_phylogenetics/alignment.h",
+        "include/parallel_phylogenetics/io.h",
+        "include/parallel_phylogenetics/likelihood.h",
+    ],
     includes = ["include"],
     visibility = ["//visibility:public"],
     deps = [
@@ -17,4 +32,33 @@ cc_test(
     name = "likelihood_test",
     srcs = ["tests/likelihood_test.cc"],
     deps = [":parallel_phylogenetics"],
+)
+
+cc_binary(
+    name = "metal_benchmark",
+    srcs = [
+        "benchmarks/benchmark.h",
+        "benchmarks/metal_benchmark.cc",
+    ],
+    target_compatible_with = select({
+        ":macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":parallel_phylogenetics",
+        "@parallel_tree_hmm//:tree_hmm_metal",
+    ],
+)
+
+cc_binary(
+    name = "cuda_benchmark",
+    srcs = [
+        "benchmarks/benchmark.h",
+        "benchmarks/cuda_benchmark.cc",
+    ],
+    target_compatible_with = requires_cuda(),
+    deps = [
+        ":parallel_phylogenetics",
+        "@parallel_tree_hmm//:tree_hmm_cuda",
+    ],
 )

@@ -1,2 +1,4 @@
 /bazel-*
 /.cache/
+/data/
+/results/

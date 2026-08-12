@@ -1,12 +1,35 @@
+#include "parallel_phylogenetics/alignment.h"
+#include "parallel_phylogenetics/io.h"
 #include "parallel_phylogenetics/likelihood.h"
+#include "tree_hmm/inference.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <new>
 #include <stdexcept>
 #include <vector>
+
+namespace {
+bool g_count_allocations = false;
+std::size_t g_allocations = 0;
+} // namespace
+
+void *operator new(std::size_t size) {
+  if (g_count_allocations)
+    ++g_allocations;
+  if (void *result = std::malloc(size))
+    return result;
+  throw std::bad_alloc();
+}
+
+void operator delete(void *pointer) noexcept { std::free(pointer); }
+void operator delete(void *pointer, std::size_t) noexcept {
+  std::free(pointer);
+}
 
 namespace {
 
@@ -75,19 +98,19 @@ int main() {
   const std::vector<double> lengths{0.1, 0.3, 0.2, 0.4, 0.15, 0.5};
   using N = parallel_phylogenetics::Nucleotide;
   const std::vector<N> observations{
-      N::kUnknown, N::kUnknown, N::kUnknown, N::kUnknown,
-      N::kA,       N::kG,       N::kT,
+      N::kUnknown, N::kUnknown, N::kUnknown, N::kUnknown, N::kA, N::kG, N::kT,
   };
   const std::array<double, 4> frequencies{0.3, 0.2, 0.2, 0.3};
-  const parallel_phylogenetics::SiteModelView model{
-      plan, lengths, observations, frequencies, 1.0};
+  const parallel_phylogenetics::SiteModelView model{plan, lengths, observations,
+                                                    frequencies, 1.0};
   const double expected =
       FelsensteinReference(plan, lengths, observations, frequencies);
   const double actual = parallel_phylogenetics::SiteLikelihood(model);
   Check(Near(actual, expected));
+  Check(Near(parallel_phylogenetics::SiteLogLikelihood(model),
+             std::log(expected)));
 
-  const auto posterior =
-      parallel_phylogenetics::AncestralPosterior(model);
+  const auto posterior = parallel_phylogenetics::AncestralPosterior(model);
   Check(Near(posterior.likelihood, expected));
   for (std::size_t node = 0; node < plan.num_nodes(); ++node) {
     double sum = 0.0;
@@ -95,4 +118,73 @@ int main() {
       sum += posterior.ancestral_states[node * 4 + state];
     Check(Near(sum, 1.0));
   }
+
+  const std::vector<N> alignment_observations{
+      N::kUnknown, N::kUnknown, N::kUnknown, N::kUnknown, N::kA, N::kG, N::kT,
+      N::kUnknown, N::kUnknown, N::kUnknown, N::kUnknown, N::kC, N::kC, N::kA,
+  };
+  parallel_phylogenetics::AlignmentWorkspace alignment_workspace;
+  alignment_workspace.Reserve(plan, 2);
+  const tree_hmm::BatchedModelView prepared = parallel_phylogenetics::Prepare(
+      {plan, 2, lengths, alignment_observations, frequencies, 1.0},
+      alignment_workspace);
+  Check(prepared.batch == 2);
+  Check(prepared.states == 4);
+  parallel_phylogenetics::SequentialWorkspace sequential_workspace;
+  sequential_workspace.Reserve(plan, 2);
+  const std::span<const double> sequential =
+      parallel_phylogenetics::LogLikelihoodsPrepared(
+          {plan, 2, lengths, alignment_observations, frequencies, 1.0},
+          sequential_workspace);
+  for (std::size_t site = 0; site < 2; ++site) {
+    const std::size_t node_values = plan.num_nodes() * 4;
+    std::vector<double> site_nodes(
+        prepared.node_potentials.begin() + site * node_values,
+        prepared.node_potentials.begin() + (site + 1) * node_values);
+    std::vector<double> site_edges(prepared.edge_potentials.begin(),
+                                   prepared.edge_potentials.end());
+    const double prepared_log_likelihood =
+        tree_hmm::LogPartitionFunction({plan, 4, site_nodes, site_edges});
+    const std::span<const N> site_observations(alignment_observations.data() +
+                                                   site * plan.num_nodes(),
+                                               plan.num_nodes());
+    Check(Near(prepared_log_likelihood,
+               parallel_phylogenetics::SiteLogLikelihood(
+                   {plan, lengths, site_observations, frequencies, 1.0}),
+               2e-6));
+    Check(Near(sequential[site], prepared_log_likelihood, 2e-6));
+  }
+  g_allocations = 0;
+  g_count_allocations = true;
+  for (int repeat = 0; repeat < 10; ++repeat) {
+    static_cast<void>(parallel_phylogenetics::Prepare(
+        {plan, 2, lengths, alignment_observations, frequencies, 1.0},
+        alignment_workspace));
+    static_cast<void>(parallel_phylogenetics::LogLikelihoodsPrepared(
+        {plan, 2, lengths, alignment_observations, frequencies, 1.0},
+        sequential_workspace));
+  }
+  g_count_allocations = false;
+  Check(g_allocations == 0);
+
+  const parallel_phylogenetics::Phylogeny parsed_tree =
+      parallel_phylogenetics::ParseNewick(
+          "((A:0.1,'B_taxon':0.2)I:0.3,C:0.4)Root;");
+  Check(parsed_tree.plan.num_nodes() == 5);
+  Check(parsed_tree.plan.num_edges() == 4);
+  Check(parsed_tree.labels[parsed_tree.plan.root()] == "Root");
+  Check(Near(parsed_tree.branch_lengths[0], 0.3));
+  Check(Near(parsed_tree.branch_lengths[1], 0.1));
+  Check(Near(parsed_tree.branch_lengths[2], 0.2));
+  Check(Near(parsed_tree.branch_lengths[3], 0.4));
+
+  const parallel_phylogenetics::SequenceAlignment parsed_alignment =
+      parallel_phylogenetics::ParseFasta(
+          ">A description\nACG\n>B_taxon description\nA-N\n>C\nTCG\n");
+  Check(parsed_alignment.sites == 3);
+  const parallel_phylogenetics::EncodedAlignment encoded =
+      parallel_phylogenetics::EncodeAlignment(parsed_tree, parsed_alignment);
+  Check(encoded.sites == 3);
+  Check(encoded.observations.size() ==
+        encoded.sites * parsed_tree.plan.num_nodes());
 }

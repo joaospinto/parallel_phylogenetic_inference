@@ -23,14 +23,16 @@ Potentials BuildPotentials(SiteModelView model) {
     throw std::invalid_argument("one observation marker is required per node");
   if (!(model.substitution_rate >= 0.0) ||
       !std::isfinite(model.substitution_rate)) {
-    throw std::invalid_argument("the substitution rate must be finite and nonnegative");
+    throw std::invalid_argument(
+        "the substitution rate must be finite and nonnegative");
   }
   const double frequency_sum = std::accumulate(
       model.root_frequencies.begin(), model.root_frequencies.end(), 0.0);
   if (!std::isfinite(frequency_sum) || std::abs(frequency_sum - 1.0) > 1e-12 ||
       std::any_of(model.root_frequencies.begin(), model.root_frequencies.end(),
                   [](double value) { return value < 0.0; })) {
-    throw std::invalid_argument("root frequencies must be nonnegative and sum to one");
+    throw std::invalid_argument(
+        "root frequencies must be nonnegative and sum to one");
   }
 
   Potentials result;
@@ -45,15 +47,18 @@ Potentials BuildPotentials(SiteModelView model) {
     if (state < 0 || state >= 4)
       throw std::invalid_argument("invalid nucleotide observation");
     double *potential = result.nodes.data() + node * 4;
-    std::fill(potential, potential + 4, 0.0);
-    potential[state] = 1.0;
+    for (int candidate = 0; candidate < 4; ++candidate) {
+      if (candidate != state)
+        potential[candidate] = 0.0;
+    }
   }
 
   result.edges.reserve(model.plan.num_edges() * 16);
   for (const double length : model.branch_lengths) {
     const auto transition =
         JukesCantorTransition(length, model.substitution_rate);
-    result.edges.insert(result.edges.end(), transition.begin(), transition.end());
+    result.edges.insert(result.edges.end(), transition.begin(),
+                        transition.end());
   }
   return result;
 }
@@ -81,6 +86,12 @@ std::array<double, 16> JukesCantorTransition(double branch_length,
 double SiteLikelihood(SiteModelView model) {
   const Potentials potentials = BuildPotentials(model);
   return tree_hmm::PartitionFunction(
+      {model.plan, 4, potentials.nodes, potentials.edges});
+}
+
+double SiteLogLikelihood(SiteModelView model) {
+  const Potentials potentials = BuildPotentials(model);
+  return tree_hmm::LogPartitionFunction(
       {model.plan, 4, potentials.nodes, potentials.edges});
 }
 

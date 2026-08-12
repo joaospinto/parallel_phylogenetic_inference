@@ -38,6 +38,7 @@ std::array<double, 16> JukesCantorTransition(double branch_length,
                                              double rate = 1.0);
 
 double SiteLikelihood(SiteModelView model);
+double SiteLogLikelihood(SiteModelView model);
 SitePosterior AncestralPosterior(SiteModelView model);
 
 } // namespace parallel_phylogenetics
