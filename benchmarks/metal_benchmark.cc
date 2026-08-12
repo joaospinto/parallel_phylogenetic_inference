@@ -23,18 +23,20 @@ int main(int argc, char **argv) {
         options.site_batch == 0 ? problem.sites
                                 : std::min(options.site_batch, problem.sites);
     tree_hmm::metal::Workspace full_workspace;
-    full_workspace.Reserve(problem.plan, 4, site_batch);
+    full_workspace.ReserveCategorical(problem.plan, 4, site_batch, 16,
+                                      problem.observation_nodes);
     const BenchmarkResult result =
         site_batch == problem.sites
             ? RunInterleaved(
-                  model, options.repeats, full_workspace.Inputs(),
-                  [&](tree_hmm::BatchedModelView factors) {
+                  model, options.repeats, full_workspace.CategoricalInputs(),
+                  [&](tree_hmm::BatchedCategoricalModelView factors) {
                     return tree_hmm::metal::LogPartitionFunctionPrepared(
                         factors, full_workspace);
                   })
             : RunChunkedInterleaved(
-                  model, options.repeats, site_batch, full_workspace.Inputs(),
-                  [&](tree_hmm::BatchedModelView factors) {
+                  model, options.repeats, site_batch,
+                  full_workspace.CategoricalInputs(),
+                  [&](tree_hmm::BatchedCategoricalModelView factors) {
                     return tree_hmm::metal::LogPartitionFunctionPrepared(
                         factors, full_workspace);
                   });

@@ -26,7 +26,9 @@ void Workspace::Reserve(AlignmentModelView model,
   internal::ReserveOperation(storage, model, site_batch_capacity,
                              internal::PreparedOperation::kLikelihood,
                              [&](std::size_t batch) {
-                               storage.tree_hmm.Reserve(model.plan, 4, batch);
+                               storage.tree_hmm.ReserveCategorical(
+                                   model.plan, 4, batch, 16,
+                                   model.observation_nodes);
                              });
 }
 
@@ -36,7 +38,8 @@ void Workspace::ReserveMaximum(AlignmentModelView model,
   internal::ReserveOperation(
       storage, model, site_batch_capacity,
       internal::PreparedOperation::kMaximum, [&](std::size_t batch) {
-        storage.tree_hmm.ReserveMaximum(model.plan, 4, batch);
+        storage.tree_hmm.ReserveCategoricalMaximum(
+            model.plan, 4, batch, 16, model.observation_nodes);
       });
 }
 
@@ -46,7 +49,8 @@ void Workspace::ReserveSampling(AlignmentModelView model,
   internal::ReserveOperation(
       storage, model, site_batch_capacity,
       internal::PreparedOperation::kSampling, [&](std::size_t batch) {
-        storage.tree_hmm.ReserveSampling(model.plan, 4, batch);
+        storage.tree_hmm.ReserveCategoricalSampling(
+            model.plan, 4, batch, 16, model.observation_nodes);
       });
 }
 
@@ -56,7 +60,8 @@ void Workspace::ReserveMarginals(AlignmentModelView model,
   internal::ReserveOperation(
       storage, model, site_batch_capacity,
       internal::PreparedOperation::kMarginals, [&](std::size_t batch) {
-        storage.tree_hmm.ReserveMarginals(model.plan, 4, batch);
+        storage.tree_hmm.ReserveCategoricalMarginals(
+            model.plan, 4, batch, 16, model.observation_nodes);
       });
 }
 
@@ -70,8 +75,8 @@ std::span<const float> LogLikelihoodsPrepared(AlignmentModelView model,
   internal::ValidatePrepared(model, storage,
                              internal::PreparedOperation::kLikelihood, false);
   return internal::LogLikelihoodsPrepared(
-      model, storage.batch_capacity, storage.tree_hmm.Inputs(),
-      [&](tree_hmm::BatchedModelView factors) {
+      model, storage.batch_capacity, storage.tree_hmm.CategoricalInputs(),
+      [&](tree_hmm::BatchedCategoricalModelView factors) {
         return tree_hmm::metal::LogPartitionFunctionPrepared(factors,
                                                              storage.tree_hmm);
       },
@@ -84,8 +89,8 @@ AlignmentMaximumView MaximumAPosterioriPrepared(AlignmentModelView model,
   internal::ValidatePrepared(model, storage,
                              internal::PreparedOperation::kMaximum);
   return internal::MaximumAPosterioriPrepared(
-      model, storage.tree_hmm.Inputs(),
-      [&](tree_hmm::BatchedModelView factors) {
+      model, storage.tree_hmm.CategoricalInputs(),
+      [&](tree_hmm::BatchedCategoricalModelView factors) {
         return tree_hmm::metal::MaximumAPosterioriPrepared(factors,
                                                            storage.tree_hmm);
       });
@@ -98,9 +103,9 @@ PosteriorSamplePrepared(AlignmentModelView model,
   internal::ValidatePrepared(model, storage,
                              internal::PreparedOperation::kSampling);
   return internal::PosteriorSamplePrepared(
-      model, uniforms, storage.tree_hmm.Inputs(),
+      model, uniforms, storage.tree_hmm.CategoricalInputs(),
       [&](std::size_t batch) { return storage.tree_hmm.Uniforms(batch); },
-      [&](tree_hmm::BatchedModelView factors,
+      [&](tree_hmm::BatchedCategoricalModelView factors,
           std::span<const float> staged_uniforms) {
         return tree_hmm::metal::PosteriorSamplePrepared(
             factors, staged_uniforms, storage.tree_hmm);
@@ -113,8 +118,8 @@ AlignmentPosteriorView PosteriorMarginalsPrepared(AlignmentModelView model,
   internal::ValidatePrepared(model, storage,
                              internal::PreparedOperation::kMarginals);
   return internal::PosteriorMarginalsPrepared(
-      model, storage.tree_hmm.Inputs(),
-      [&](tree_hmm::BatchedModelView factors) {
+      model, storage.tree_hmm.CategoricalInputs(),
+      [&](tree_hmm::BatchedCategoricalModelView factors) {
         return tree_hmm::metal::PosteriorMarginalsPrepared(factors,
                                                            storage.tree_hmm);
       });

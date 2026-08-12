@@ -27,9 +27,10 @@ The current implementation provides:
   tree-HMM representation and handle capacity-bounded site batches;
 - native Metal and CUDA benchmark executables with numerical cross-checks.
 
-Alignment conversion writes directly into caller-provided accelerator input
-storage. CUDA uses pinned host buffers and Metal uses shared buffers, so the
-same generic tree-HMM call does not make a second full-batch staging copy.
+Alignment conversion writes compact categorical observations directly into
+caller-provided accelerator input storage. CUDA uses pinned host buffers and
+Metal uses shared buffers, so the same generic tree-HMM call neither makes a
+second full-batch staging copy nor materializes dense node factors on the host.
 
 The accelerator kernels currently use FP32, while the conventional CPU
 baseline uses FP64. Every benchmark reports the maximum absolute discrepancy
@@ -48,10 +49,10 @@ std::span<const float> log_likelihoods =
 ```
 
 The corresponding Metal interface differs only in the namespace and has no
-device argument. CUDA stages compact categorical observations; Metal writes
-dense factors directly into shared host/device storage. Both call the same
-backend-neutral tree-HMM contraction executor, and repeated prepared calls do
-not resize numerical workspace storage or reconstruct the topology plan.
+device argument. Both backends stage compact categorical observations and call
+the same backend-neutral tree-HMM contraction executor. Repeated prepared
+calls do not resize numerical workspace storage or reconstruct the topology
+plan.
 
 Recovery uses operation-specific workspaces so likelihood-only evaluations do
 not retain unnecessary reverse-pass data. For example, posterior marginals for
