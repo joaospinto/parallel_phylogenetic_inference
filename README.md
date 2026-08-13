@@ -421,6 +421,15 @@ in the report cache identity. Each case first attempts the complete compressed
 alignment in an isolated child process and halves its site batch after a
 capacity failure, so a smaller GPU does not restart the notebook.
 
+The `empirical` section accepts one or more whitespace-separated manifest
+paths through `TREE_HMM_EMPIRICAL_MANIFESTS` and runs the native backend plus
+the available BEAGLE CPU/CUDA resources under the same capacity policy. The
+Kaggle launcher automatically discovers attached directories containing both
+`manifest.csv` and `corpus_metadata.txt`, and extracts archives named
+`parallel_phylogenetics_corpus_*.zip`. Attaching such a corpus without an
+explicit section override adds `empirical` to the selected notebook sections;
+the manifest and metadata hashes participate in cache identity.
+
 For a prespecified broad empirical cohort,
 `scripts/prepare_dryad_corpus.py` imports all 222 alignments in the pinned
 archive's `empirical-long/dna_long_empirical` cohort from Dryad

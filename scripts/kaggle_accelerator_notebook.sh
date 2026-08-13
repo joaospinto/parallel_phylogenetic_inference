@@ -61,6 +61,59 @@ if [[ ! -r "${work}/SOURCE_REVISIONS.txt" ]]; then
   echo "the source input is missing SOURCE_REVISIONS.txt" >&2
   exit 2
 fi
+
+if [[ -z "${TREE_HMM_EMPIRICAL_MANIFESTS:-}" ]]; then
+  corpus_root="${work}/attached-corpora"
+  mkdir -p "${corpus_root}"
+  archive_index=0
+  while IFS= read -r archive; do
+    archive_index=$((archive_index + 1))
+    destination="${corpus_root}/archive-${archive_index}"
+    mkdir -p "${destination}"
+    echo "extracting attached empirical corpus $(basename "${archive}")"
+    unzip -q "${archive}" -d "${destination}"
+  done < <(find "${notebook_input_dir}" -type f \
+    -name 'parallel_phylogenetics_corpus_*.zip' -print | sort)
+  empirical_manifests=()
+  while IFS= read -r candidate; do
+    if [[ -r "$(dirname "${candidate}")/corpus_metadata.txt" ]]; then
+      empirical_manifests+=("${candidate}")
+    fi
+  done < <(find "${notebook_input_dir}" "${corpus_root}" -type f \
+    -name manifest.csv -print 2>/dev/null | sort -u)
+  if [[ "${#empirical_manifests[@]}" != 0 ]]; then
+    export TREE_HMM_EMPIRICAL_MANIFESTS="${empirical_manifests[*]}"
+    if [[ -z "${TREE_HMM_BENCHMARK_SECTIONS:-}" ]]; then
+      if [[ "${TREE_HMM_BENCHMARK_PROFILE:-curated}" == complete ]]; then
+        TREE_HMM_BENCHMARK_SECTIONS="validation synthetic distributions jc69 tasks fish pandit empirical"
+      else
+        TREE_HMM_BENCHMARK_SECTIONS="validation synthetic fish pandit empirical"
+      fi
+      export TREE_HMM_BENCHMARK_SECTIONS
+    fi
+    echo "detected ${#empirical_manifests[@]} attached empirical corpus manifest(s)"
+  fi
+fi
+
+empirical_manifest_identity=none
+if [[ -n "${TREE_HMM_EMPIRICAL_MANIFESTS:-}" ]]; then
+  read -r -a empirical_manifests <<< "${TREE_HMM_EMPIRICAL_MANIFESTS}"
+  empirical_manifest_identity="$({
+    for manifest in "${empirical_manifests[@]}"; do
+      if [[ ! -r "${manifest}" ]]; then
+        echo "empirical manifest is not readable: ${manifest}" >&2
+        exit 2
+      fi
+      echo "manifest=$(sha256_file "${manifest}")"
+      metadata="$(dirname "${manifest}")/corpus_metadata.txt"
+      if [[ -r "${metadata}" ]]; then
+        echo "metadata=$(sha256_file "${metadata}")"
+      else
+        echo "metadata=missing"
+      fi
+    done
+  } | sort | sha256_stream)"
+fi
 script_dir="${work}/parallel_phylogenetic_inference/scripts"
 # shellcheck source=scripts/accelerator_environment.sh
 source "${script_dir}/accelerator_environment.sh"
@@ -149,7 +202,7 @@ cache_identity="$(
       default_task_modes="full-input-update"
       default_pandit_limit=25
     fi
-    echo "parallel-phylogenetics-benchmark-schema=7"
+    echo "parallel-phylogenetics-benchmark-schema=8"
     echo "benchmark-profile=${benchmark_profile}"
     echo "accelerator-backend=${accelerator_backend}"
     echo "hardware=${hardware_identity}"
@@ -175,6 +228,8 @@ cache_identity="$(
     echo "jc69-maximum-repeats-override=${TREE_HMM_JC69_MAXIMUM_TIMING_REPEATS:-unset}"
     echo "jc69-work-budget-override=${TREE_HMM_JC69_TIMING_WORK_BUDGET:-unset}"
     echo "jc69-minimum-site-batch=${TREE_HMM_JC69_MINIMUM_SITE_BATCH:-128}"
+    echo "empirical-modes=${TREE_HMM_EMPIRICAL_BENCHMARK_MODES:-full-input-update}"
+    echo "empirical-manifests=${empirical_manifest_identity}"
     echo "pandit-limit=${PANDIT_LIMIT:-${default_pandit_limit}}"
     echo "repeats=${TREE_HMM_BENCHMARK_REPEATS:-15}"
     echo "empirical-repeats=${TREE_HMM_EMPIRICAL_REPEATS:-3}"

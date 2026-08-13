@@ -407,7 +407,7 @@ cat > "${source_root}/parallel_phylogenetic_inference/scripts/notebook_rocm.sh" 
 printf 'rocm stub precision=%s\n' "${TREE_HMM_PRECISIONS}"
 EOF
 cache_identity="$({
-  echo 'parallel-phylogenetics-benchmark-schema=7'
+  echo 'parallel-phylogenetics-benchmark-schema=8'
   echo 'benchmark-profile=curated'
   echo 'accelerator-backend=cuda'
   echo 'hardware=test-hardware'
@@ -433,6 +433,8 @@ cache_identity="$({
   echo 'jc69-maximum-repeats-override=unset'
   echo 'jc69-work-budget-override=unset'
   echo 'jc69-minimum-site-batch=128'
+  echo 'empirical-modes=full-input-update'
+  echo 'empirical-manifests=none'
   echo 'pandit-limit=25'
   echo 'repeats=15'
   echo 'empirical-repeats=3'
@@ -529,3 +531,24 @@ grep -Fq 'different source identity' "${launcher_root}/zip.log"
   "${working_root}/parallel_phylogenetics_cuda_report.txt"
 grep -Fq 'stub precision=FP64 skip_fish=0' \
   "${working_root}/parallel_phylogenetics_cuda_report.txt"
+
+attached_corpus="${launcher_root}/input/attached-corpus"
+mkdir -p "${attached_corpus}"
+printf '%s\n' 'corpus_name=attached-fixture' > \
+  "${attached_corpus}/corpus_metadata.txt"
+printf '%s\n' 'dataset,taxa,raw_sites,unique_patterns,alignment,pattern_weights,tree' > \
+  "${attached_corpus}/manifest.csv"
+empirical_working="${launcher_root}/empirical-working"
+mkdir -p "${empirical_working}"
+TREE_HMM_NOTEBOOK_INPUT_DIR="${launcher_root}/input" \
+TREE_HMM_NOTEBOOK_WORKING_DIR="${empirical_working}" \
+TREE_HMM_PRECISIONS_OVERRIDE=FP32 TREE_HMM_SKIP_FISH_TREE=1 \
+TREE_HMM_BENCHMARK_SECTIONS=empirical \
+TREE_HMM_HARDWARE_IDENTITY_OVERRIDE=test-hardware \
+TREE_HMM_RESUME_SCOPE=hardware-class \
+  bash "${root}/scripts/kaggle_cuda_notebook.sh" "${source_root}" \
+  > "${launcher_root}/empirical.log"
+grep -Fq 'detected 1 attached empirical corpus manifest(s)' \
+  "${launcher_root}/empirical.log"
+grep -Fq 'stub sections=empirical' \
+  "${empirical_working}/parallel_phylogenetics_cuda_report.txt"

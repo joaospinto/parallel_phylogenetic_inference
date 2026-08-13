@@ -80,6 +80,7 @@ case "${benchmark_profile}" in
     default_modes="full-input-update"
     default_synthetic_modes="full-input-update factor-update fixed-model"
     default_jc69_modes="full-input-update"
+    default_empirical_modes="full-input-update"
     default_task_modes="full-input-update"
     default_pandit_limit=25
     ;;
@@ -88,6 +89,7 @@ case "${benchmark_profile}" in
     default_modes="full-input-update factor-update fixed-model"
     default_synthetic_modes="${default_modes}"
     default_jc69_modes="full-input-update"
+    default_empirical_modes="full-input-update"
     default_task_modes="${default_modes}"
     default_pandit_limit=0
     ;;
@@ -113,6 +115,10 @@ read -r -a task_benchmark_modes <<< \
   "${TREE_HMM_TASK_BENCHMARK_MODES:-${default_task_modes}}"
 read -r -a jc69_benchmark_modes <<< \
   "${TREE_HMM_JC69_BENCHMARK_MODES:-${default_jc69_modes}}"
+read -r -a empirical_benchmark_modes <<< \
+  "${TREE_HMM_EMPIRICAL_BENCHMARK_MODES:-${default_empirical_modes}}"
+read -r -a empirical_manifests <<< \
+  "${TREE_HMM_EMPIRICAL_MANIFESTS:-}"
 pandit_limit="${PANDIT_LIMIT:-${default_pandit_limit}}"
 logical_core_count="$(nproc)"
 read -r -a beagle_cpu_thread_counts <<< \
@@ -155,7 +161,8 @@ for precision in "${precisions[@]}"; do
 done
 for mode in "${benchmark_modes[@]}" "${synthetic_benchmark_modes[@]}" \
   "${fish_benchmark_modes[@]}" "${pandit_benchmark_modes[@]}" \
-  "${task_benchmark_modes[@]}" "${jc69_benchmark_modes[@]}"; do
+  "${task_benchmark_modes[@]}" "${jc69_benchmark_modes[@]}" \
+  "${empirical_benchmark_modes[@]}"; do
   case "${mode}" in
     full-input-update|factor-update|fixed-model) ;;
     *)
@@ -176,7 +183,7 @@ if [[ "${#benchmark_sections[@]}" -eq 0 ]]; then
 fi
 for section in "${benchmark_sections[@]}"; do
   case "${section}" in
-    validation|synthetic|distributions|jc69|tasks|fish|pandit) ;;
+    validation|synthetic|distributions|jc69|tasks|fish|pandit|empirical) ;;
     *)
       echo "TREE_HMM_BENCHMARK_SECTIONS contains unsupported section ${section}" >&2
       exit 2
@@ -264,6 +271,19 @@ benchmark_section_enabled() {
   [[ "${TREE_HMM_SKIP_BENCHMARKS:-0}" != "1" ]] && section_selected "$1"
 }
 
+if benchmark_section_enabled empirical; then
+  if [[ "${#empirical_manifests[@]}" == 0 ]]; then
+    echo "the empirical section requires TREE_HMM_EMPIRICAL_MANIFESTS" >&2
+    exit 2
+  fi
+  for manifest in "${empirical_manifests[@]}"; do
+    if [[ ! -r "${manifest}" ]]; then
+      echo "empirical manifest is not readable: ${manifest}" >&2
+      exit 2
+    fi
+  done
+fi
+
 initial_host_memory_guard_kib="$(current_host_memory_guard_kib)"
 
 echo "=== Source revisions ==="
@@ -318,6 +338,10 @@ echo "PANDIT family limit: ${pandit_limit}"
 echo "fish benchmark modes: ${fish_benchmark_modes[*]}"
 echo "PANDIT benchmark modes: ${pandit_benchmark_modes[*]}"
 echo "JC69 benchmark modes: ${jc69_benchmark_modes[*]}"
+echo "empirical benchmark modes: ${empirical_benchmark_modes[*]}"
+if [[ "${#empirical_manifests[@]}" != 0 ]]; then
+  printf 'empirical manifests: %s\n' "${empirical_manifests[*]}"
+fi
 echo "host logical cores: ${logical_core_count}"
 echo "BEAGLE CPU thread counts: ${beagle_cpu_thread_counts[*]}"
 echo "host-memory guard for CPU capacity probes:" \
@@ -358,6 +382,7 @@ if [[ "${TREE_HMM_SKIP_BENCHMARKS:-0}" != "1" &&
       "${TREE_HMM_SKIP_BEAGLE:-0}" != "1" ]] &&
    { section_selected synthetic || section_selected distributions ||
      section_selected jc69 ||
+     section_selected empirical ||
      section_selected fish ||
      section_selected pandit; }; then
   beagle_build_backend=cpu
@@ -584,6 +609,48 @@ for precision in "${precisions[@]}"; do
           done
         done
       fi
+    done
+  fi
+
+  if benchmark_section_enabled empirical; then
+    echo "=== ${precision} attached empirical-corpus benchmarks ==="
+    if [[ "${TREE_HMM_SKIP_BEAGLE:-0}" != "1" ]]; then
+      "${bazel_command}" build "${precision_args[@]}" //:beagle_benchmark
+    fi
+    for manifest in "${empirical_manifests[@]}"; do
+      echo "# attached_empirical_manifest=${manifest}"
+      for benchmark_mode in "${empirical_benchmark_modes[@]}"; do
+        PRECISION="${precision_config}" \
+          TREE_HMM_BENCHMARK_MODE="${benchmark_mode}" \
+          TREE_HMM_BENCHMARK_CONDITIONING_MS="${conditioning_ms}" \
+          TREE_HMM_EMPIRICAL_MINIMUM_BRANCH_LENGTH="${empirical_minimum_branch_length}" \
+          TREE_HMM_EMPIRICAL_REPEATS="${empirical_repeats}" \
+          TREE_HMM_RESUME_REPORT="${resume_report}" \
+          TREE_HMM_HOST_MEMORY_GUARD_PERCENT="${host_memory_guard_percent}" \
+          bash "${repo_dir}/scripts/benchmark_empirical_manifest.sh" \
+            "${accelerator_backend}" "${manifest}"
+        if [[ "${TREE_HMM_SKIP_BEAGLE:-0}" != "1" ]]; then
+          for resource in "${beagle_resources[@]}"; do
+            if [[ "${resource}" == cpu ]]; then
+              resource_threads=("${beagle_cpu_thread_counts[@]}")
+            else
+              resource_threads=(1)
+            fi
+            for threads in "${resource_threads[@]}"; do
+              PRECISION="${precision_config}" \
+                TREE_HMM_BENCHMARK_MODE="${benchmark_mode}" \
+                TREE_HMM_BENCHMARK_CONDITIONING_MS="${conditioning_ms}" \
+                TREE_HMM_EMPIRICAL_MINIMUM_BRANCH_LENGTH="${empirical_minimum_branch_length}" \
+                TREE_HMM_EMPIRICAL_REPEATS="${empirical_repeats}" \
+                TREE_HMM_RESUME_REPORT="${resume_report}" \
+                TREE_HMM_HOST_MEMORY_GUARD_PERCENT="${host_memory_guard_percent}" \
+                BEAGLE_THREADS="${threads}" \
+                bash "${repo_dir}/scripts/benchmark_empirical_manifest.sh" \
+                  "beagle-${resource}" "${manifest}"
+            done
+          done
+        fi
+      done
     done
   fi
 
