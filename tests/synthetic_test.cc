@@ -23,6 +23,28 @@ void CheckImpl(bool condition, int line) {
 
 int main() {
   using namespace parallel_phylogenetics::benchmark;
+  RequireBenchmarkCorrectness(0.0, kMaximumNormalizedError);
+  bool rejected_normalized_error = false;
+  try {
+    RequireBenchmarkCorrectness(0.0, kMaximumNormalizedError * 1.01);
+  } catch (const std::runtime_error &) {
+    rejected_normalized_error = true;
+  }
+  Check(rejected_normalized_error);
+  bool rejected_state_mismatch = false;
+  try {
+    RequireBenchmarkCorrectness(0.0, 0.0, 1);
+  } catch (const std::runtime_error &) {
+    rejected_state_mismatch = true;
+  }
+  Check(rejected_state_mismatch);
+  bool rejected_nonfinite_absolute = false;
+  try {
+    RequireBenchmarkCorrectness(std::numeric_limits<double>::infinity(), 0.0);
+  } catch (const std::runtime_error &) {
+    rejected_nonfinite_absolute = true;
+  }
+  Check(rejected_nonfinite_absolute);
   constexpr std::size_t kLeaves = 64;
   for (const std::string topology :
        {"balanced", "yule", "beta-critical", "uniform", "caterpillar"}) {

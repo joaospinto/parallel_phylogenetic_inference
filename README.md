@@ -431,6 +431,9 @@ length policy, so changed prepared data cannot silently reuse old results.
 builds both Linux accelerator backends from checksum-pinned SDKs, executes the
 backend matching the detected device, and records the host and device
 configuration. CUDA execution is additionally checked with Compute Sanitizer.
+If Compute Sanitizer is unavailable while CUDA validation is selected, the
+run records `validation_incomplete` and stops; only the explicit
+`TREE_HMM_SKIP_SANITIZER=1` override permits validation to proceed without it.
 Its default `curated` profile runs the complete large-data comparisons, a
 25-family paired PANDIT cohort, and representative unchunked resident cases.
 `TREE_HMM_BENCHMARK_PROFILE=complete` enables every precision, mode,
@@ -440,7 +443,12 @@ Reports resume only within the same host/GPU session by default: the cache
 identity includes the host boot and accelerator identity as well as every
 benchmark-grid setting. Setting `TREE_HMM_RESUME_SCOPE=hardware-class`
 explicitly permits reuse across different workers with the same recorded
-hardware class and software protocol.
+hardware class and software protocol. That identity includes the OS and kernel,
+host compiler, system CUDA compiler, CMake and Bazel versions, accelerator
+architecture overrides, and relevant toolchain arguments. Cross-worker reuse
+works only when `hardware-class` was selected for both the original and resumed
+run; a report created with the safer default `session` scope is intentionally
+not reclassified later.
 Before native execution, the launcher verifies that the host NVIDIA driver is
 new enough for the pinned CUDA toolkit or that the pinned ROCm runtime can
 enumerate the selected AMD device through the host kernel driver. The notebook
@@ -462,7 +470,8 @@ scripts/package_notebook_sources.sh
 ```
 
 An interrupted run can be resumed without repeating completed configurations
-by embedding its downloaded report in the next source bundle:
+in the same runtime from its working report. To embed a downloaded report in a
+new source bundle, use:
 
 ```sh
 scripts/package_notebook_sources.sh \
@@ -471,14 +480,25 @@ scripts/package_notebook_sources.sh \
 ```
 
 The notebook recognizes completed validation phases, individual benchmark
-configurations, and PANDIT families from the earlier report and appends only
-the missing results. Its standard run selects the `validation`, `synthetic`,
+configurations, and PANDIT families from a cache-compatible earlier report and
+appends only the missing results. A different worker can use the embedded
+report only if both invocations explicitly set
+`TREE_HMM_RESUME_SCOPE=hardware-class`; default session-scoped reports remain
+bound to their original host boot and GPU. Its standard run selects the
+`validation`, `synthetic`,
 `fish`, and `pandit` sections. A notebook-side environment override can select
 any subset without duplicating orchestration, for example
 `TREE_HMM_BENCHMARK_SECTIONS="fish pandit"` together with
 `TREE_HMM_PRECISIONS_OVERRIDE=FP32`. Existing `TREE_HMM_SKIP_*` controls,
 repeat-count overrides, sanitizer controls, and memory-guard overrides remain
 available.
+
+The report ends with `benchmark_suite_complete` only after every effective
+section and selected precision has emitted its completion marker, every
+capacity boundary has a successful smaller-batch measurement for the same
+method and problem, and every CSV row passes the common correctness policy:
+normalized error at most `2e-3` in FP32 or `1e-10` in FP64, finite descriptive
+absolute error, and zero discrete-state mismatches for recovery tasks.
 
 The `jc69` section runs the prespecified clock-like JC69 study through the same
 resumable workflow for the native accelerator and matching BEAGLE resources.

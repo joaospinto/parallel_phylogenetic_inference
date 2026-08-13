@@ -1,18 +1,41 @@
 #!/usr/bin/env bash
 
-# Run one empirical batch in an isolated process. Recognized capacity failures
-# set benchmark_capacity_exhausted and return success so the caller can proceed
-# with other methods; unrelated failures retain their original status.
-benchmark_host_memory_guard_kib() {
-  local percent="${1:-75}"
+# Return memory currently available to this process, not merely the host-wide
+# total. Linux notebook services commonly impose a cgroup limit that is much
+# smaller than /proc/meminfo; ignoring it lets an oversized child trigger the
+# notebook supervisor's OOM killer before our capacity recovery can run.
+benchmark_available_host_memory_kib() {
   local available_kib
-  if [[ ! "${percent}" =~ ^[1-9][0-9]?$ ]] ||
-     [[ "${percent}" -lt 20 || "${percent}" -gt 90 ]]; then
-    echo "host-memory guard percentage must be between 20 and 90" >&2
-    return 2
-  fi
-  if [[ "$(uname -s)" == Linux && -r /proc/meminfo ]]; then
-    available_kib="$(awk '$1 == "MemAvailable:" { print $2; exit }' /proc/meminfo)"
+  local cgroup_limit_bytes=""
+  local cgroup_usage_bytes=""
+  local cgroup_remaining_kib
+  local proc_meminfo="${TREE_HMM_PROC_MEMINFO_PATH:-/proc/meminfo}"
+  local cgroup_v2_root="${TREE_HMM_CGROUP_V2_ROOT:-/sys/fs/cgroup}"
+  local cgroup_v1_root="${TREE_HMM_CGROUP_V1_ROOT:-/sys/fs/cgroup/memory}"
+  if [[ "$(uname -s)" == Linux && -r "${proc_meminfo}" ]]; then
+    available_kib="$(awk '$1 == "MemAvailable:" { print $2; exit }' \
+      "${proc_meminfo}")"
+    if [[ -r "${cgroup_v2_root}/memory.max" &&
+          -r "${cgroup_v2_root}/memory.current" ]]; then
+      cgroup_limit_bytes="$(<"${cgroup_v2_root}/memory.max")"
+      cgroup_usage_bytes="$(<"${cgroup_v2_root}/memory.current")"
+    elif [[ -r "${cgroup_v1_root}/memory.limit_in_bytes" &&
+            -r "${cgroup_v1_root}/memory.usage_in_bytes" ]]; then
+      cgroup_limit_bytes="$(<"${cgroup_v1_root}/memory.limit_in_bytes")"
+      cgroup_usage_bytes="$(<"${cgroup_v1_root}/memory.usage_in_bytes")"
+    fi
+    if [[ "${cgroup_limit_bytes}" =~ ^[0-9]+$ &&
+          "${cgroup_usage_bytes}" =~ ^[0-9]+$ ]]; then
+      if (( cgroup_limit_bytes <= cgroup_usage_bytes )); then
+        cgroup_remaining_kib=0
+      else
+        cgroup_remaining_kib=$(((cgroup_limit_bytes - cgroup_usage_bytes) / 1024))
+      fi
+      if [[ "${available_kib}" =~ ^[0-9]+$ ]] &&
+         (( cgroup_remaining_kib < available_kib )); then
+        available_kib="${cgroup_remaining_kib}"
+      fi
+    fi
   elif [[ "$(uname -s)" == Darwin ]]; then
     available_kib="$(( $(sysctl -n hw.memsize) / 1024 ))"
   else
@@ -23,8 +46,38 @@ benchmark_host_memory_guard_kib() {
     echo "could not determine available host memory" >&2
     return 2
   }
+  printf '%s\n' "${available_kib}"
+}
+
+benchmark_host_memory_guard_kib() {
+  local percent="${1:-75}"
+  local available_kib
+  if [[ ! "${percent}" =~ ^[1-9][0-9]?$ ]] ||
+     [[ "${percent}" -lt 20 || "${percent}" -gt 90 ]]; then
+    echo "host-memory guard percentage must be between 20 and 90" >&2
+    return 2
+  fi
+  available_kib="$(benchmark_available_host_memory_kib)"
   echo $((available_kib * percent / 100))
 }
+
+benchmark_effective_host_memory_guard_kib() {
+  local percent="${1:-75}"
+  local explicit="${TREE_HMM_HOST_MEMORY_GUARD_KIB:-}"
+  if [[ -n "${explicit}" ]]; then
+    if [[ ! "${explicit}" =~ ^[1-9][0-9]*$ ]]; then
+      echo "TREE_HMM_HOST_MEMORY_GUARD_KIB must be a positive integer" >&2
+      return 2
+    fi
+    printf '%s\n' "${explicit}"
+  else
+    benchmark_host_memory_guard_kib "${percent}"
+  fi
+}
+
+# Run one empirical batch in an isolated process. Recognized capacity failures
+# set benchmark_capacity_exhausted and return success so the caller can proceed
+# with other methods; unrelated failures retain their original status.
 
 benchmark_run_capacity_bounded() {
   local work_directory="$1"

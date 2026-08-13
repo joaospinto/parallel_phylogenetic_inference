@@ -49,3 +49,20 @@ grep -Fq 'leaves=128 raw_sites=256 evolutionary_root_to_tip_distance=0.001 repli
   "${interleaved}"
 grep -Fq 'leaves=1024 raw_sites=8192 evolutionary_root_to_tip_distance=0.001 replicate_start=1 replicates=1 timing_repeats=1' \
   "${interleaved}"
+
+capacity_report="${TEST_TMPDIR:-${TMPDIR:-/tmp}}/jc69-capacity-report.txt"
+cat > "${capacity_report}" <<'EOF'
+# capacity_limit method=metal precision=FP32 dataset=synthetic-jc69-yule-128-256-0.001 study=clock-like-jc69-simulation benchmark_mode=full-input-update threads=none first_infeasible_site_batch=256 reason=allocation-failure
+EOF
+capacity_dry_run="${TEST_TMPDIR:-${TMPDIR:-/tmp}}/jc69-capacity-dry-run.txt"
+TREE_HMM_DRY_RUN=1 TREE_HMM_JC69_PROFILE=paper \
+TREE_HMM_JC69_TOPOLOGIES=yule TREE_HMM_JC69_LEAVES=128 \
+TREE_HMM_JC69_RAW_SITES=256 TREE_HMM_JC69_EVOLUTIONARY_HEIGHTS=0.001 \
+TREE_HMM_JC69_REPLICATES=1 TREE_HMM_RESUME_REPORT="${capacity_report}" \
+  bash scripts/benchmark_jc69_simulations.sh metal > "${capacity_dry_run}"
+grep -Fq '# resume_capacity_limit method=metal precision=FP32 dataset=synthetic-jc69-yule-128-256-0.001 site_batch=256' \
+  "${capacity_dry_run}"
+grep -Fq '# jc69_capacity_retry method=metal precision=FP32 site_batch=128' \
+  "${capacity_dry_run}"
+grep -Fq '# dry_run_capacity_candidate method=metal precision=FP32 dataset=synthetic-jc69-yule-128-256-0.001 site_batch=128' \
+  "${capacity_dry_run}"

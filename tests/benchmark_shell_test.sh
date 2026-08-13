@@ -47,6 +47,110 @@ benchmark_resume_validation_completed "${report}" FP64
 
 work_directory="$(mktemp -d "${TMPDIR:-/tmp}/benchmark-shell-test.XXXXXX")"
 trap 'rm -rf "${work_directory}"' EXIT
+
+if [[ "$(uname -s)" == Linux ]]; then
+  memory_fixture="${work_directory}/memory-fixture"
+  mkdir -p "${memory_fixture}/v2" "${memory_fixture}/v1"
+  printf 'MemAvailable: 1000000 kB\n' > "${memory_fixture}/meminfo"
+  printf '536870912\n' > "${memory_fixture}/v2/memory.max"
+  printf '134217728\n' > "${memory_fixture}/v2/memory.current"
+  available_kib="$(TREE_HMM_PROC_MEMINFO_PATH="${memory_fixture}/meminfo" \
+    TREE_HMM_CGROUP_V2_ROOT="${memory_fixture}/v2" \
+    TREE_HMM_CGROUP_V1_ROOT="${memory_fixture}/missing" \
+    benchmark_available_host_memory_kib)"
+  [[ "${available_kib}" == 393216 ]]
+  guard_kib="$(TREE_HMM_PROC_MEMINFO_PATH="${memory_fixture}/meminfo" \
+    TREE_HMM_CGROUP_V2_ROOT="${memory_fixture}/v2" \
+    TREE_HMM_CGROUP_V1_ROOT="${memory_fixture}/missing" \
+    benchmark_host_memory_guard_kib 75)"
+  [[ "${guard_kib}" == 294912 ]]
+  printf 'max\n' > "${memory_fixture}/v2/memory.max"
+  [[ "$(TREE_HMM_PROC_MEMINFO_PATH="${memory_fixture}/meminfo" \
+    TREE_HMM_CGROUP_V2_ROOT="${memory_fixture}/v2" \
+    benchmark_host_memory_guard_kib 75)" == 750000 ]]
+fi
+[[ "$(TREE_HMM_HOST_MEMORY_GUARD_KIB=123456 \
+  benchmark_effective_host_memory_guard_kib 75)" == 123456 ]]
+if TREE_HMM_HOST_MEMORY_GUARD_KIB=invalid \
+  benchmark_effective_host_memory_guard_kib 75 >/dev/null 2>&1; then
+  echo "an invalid explicit host-memory guard was accepted" >&2
+  exit 1
+fi
+
+sanitizer_path="${work_directory}/sanitizer-path"
+mkdir -p "${sanitizer_path}"
+if PATH="${sanitizer_path}" tree_hmm_require_compute_sanitizer FP32 \
+  >"${work_directory}/sanitizer-missing.txt" 2>&1; then
+  echo "missing Compute Sanitizer was accepted" >&2
+  exit 1
+fi
+grep -Fq '# validation_incomplete backend=cuda precision=FP32 reason=compute-sanitizer-unavailable' \
+  "${work_directory}/sanitizer-missing.txt"
+printf '#!/usr/bin/env bash\nexit 0\n' > \
+  "${sanitizer_path}/compute-sanitizer"
+chmod +x "${sanitizer_path}/compute-sanitizer"
+PATH="${sanitizer_path}" tree_hmm_require_compute_sanitizer FP32
+
+correctness_report="${work_directory}/correctness-report.txt"
+cat > "${correctness_report}" <<'EOF'
+backend,precision,max_abs_error,max_relative_error
+cuda,FP32,1000,0.002
+backend,precision,task,max_abs_error,max_relative_error,state_mismatches
+cuda,FP64,joint-map,1000,1e-10,0
+EOF
+python3 "${root}/scripts/verify_benchmark_correctness.py" \
+  "${correctness_report}" > "${work_directory}/correctness-output.txt"
+grep -Fq '# correctness_gate_complete benchmark_rows=2 task_rows=1' \
+  "${work_directory}/correctness-output.txt"
+validation_only_report="${work_directory}/validation-only-report.txt"
+printf '%s\n' '# validation_complete backend=cuda precision=FP32' > \
+  "${validation_only_report}"
+python3 "${root}/scripts/verify_benchmark_correctness.py" \
+  "${validation_only_report}" --selected-sections validation \
+  --selected-precisions FP32 >/dev/null
+if python3 "${root}/scripts/verify_benchmark_correctness.py" \
+     "${work_directory}/correctness-report.txt" \
+     --selected-sections synthetic --selected-precisions FP32 \
+     >/dev/null 2>&1; then
+  echo "strict correctness verifier accepted a selected section with no rows" >&2
+  exit 1
+fi
+sed 's/,0.002$/,0.0021/' "${correctness_report}" > \
+  "${work_directory}/bad-correctness-report.txt"
+if python3 "${root}/scripts/verify_benchmark_correctness.py" \
+     "${work_directory}/bad-correctness-report.txt" >/dev/null 2>&1; then
+  echo "strict correctness verifier accepted an FP32 threshold failure" >&2
+  exit 1
+fi
+sed 's/,1e-10,0$/,1e-10,1/' "${correctness_report}" > \
+  "${work_directory}/bad-task-state-report.txt"
+if python3 "${root}/scripts/verify_benchmark_correctness.py" \
+     "${work_directory}/bad-task-state-report.txt" >/dev/null 2>&1; then
+  echo "strict correctness verifier accepted a task state mismatch" >&2
+  exit 1
+fi
+capacity_only_report="${work_directory}/capacity-only-report.txt"
+printf '%s\n' \
+  '# capacity_limit method=cuda precision=FP32 dataset=actinopt_12k_raxml study=fish-tree-of-life-minbrlen-0.000001 benchmark_mode=full-input-update threads=none first_infeasible_site_batch=256 reason=allocation-failure' \
+  > "${capacity_only_report}"
+if python3 "${root}/scripts/verify_benchmark_correctness.py" \
+     "${capacity_only_report}" --selected-sections fish \
+     --selected-precisions FP32 \
+     >/dev/null 2>&1; then
+  echo "strict correctness verifier accepted a capacity-only section" >&2
+  exit 1
+fi
+capacity_success_report="${work_directory}/capacity-success-report.txt"
+cat > "${capacity_success_report}" <<'EOF'
+backend,precision,benchmark_mode,study,dataset,max_abs_error,max_relative_error
+cuda,FP32,full-input-update,fish-tree-of-life-minbrlen-0.000001,actinopt_12k_raxml,1000,0.001
+# capacity_limit method=cuda precision=FP32 dataset=actinopt_12k_raxml study=fish-tree-of-life-minbrlen-0.000001 benchmark_mode=full-input-update threads=none first_infeasible_site_batch=512 reason=allocation-failure
+# benchmark_section_complete section=fish backend=cuda precision=FP32
+EOF
+python3 "${root}/scripts/verify_benchmark_correctness.py" \
+  "${capacity_success_report}" --selected-sections fish \
+  --selected-precisions FP32 >/dev/null
+
 new_report="${work_directory}/new-report.txt"
 cat > "${new_report}" <<'EOF'
 backend,precision,benchmark_mode,study,dataset,topology,seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,site_batch
@@ -549,6 +653,10 @@ cp "${root}/scripts/kaggle_accelerator_notebook.sh" \
   "${source_root}/parallel_phylogenetic_inference/scripts/"
 cp "${root}/scripts/accelerator_environment.sh" \
   "${source_root}/parallel_phylogenetic_inference/scripts/"
+cp "${root}/scripts/verify_benchmark_correctness.py" \
+  "${source_root}/parallel_phylogenetic_inference/scripts/"
+printf '9.1.1\n' > \
+  "${source_root}/parallel_phylogenetic_inference/.bazelversion"
 printf '%s\n' \
   'parallel_phylogenetic_inference test-revision' \
   'parallel_tree_hmm test-revision' \
@@ -559,71 +667,35 @@ cat > "${source_root}/parallel_phylogenetic_inference/scripts/notebook_cuda.sh" 
 printf 'stub precision=%s skip_fish=%s\n' \
   "${TREE_HMM_PRECISIONS}" "${TREE_HMM_SKIP_FISH_TREE:-0}"
 printf 'stub sections=%s\n' "${TREE_HMM_BENCHMARK_SECTIONS:-}"
+if [[ "${TREE_HMM_TEST_STUB_FAILURE:-0}" == 1 ]]; then
+  exit 42
+fi
 EOF
 cat > "${source_root}/parallel_phylogenetic_inference/scripts/notebook_rocm.sh" <<'EOF'
 #!/usr/bin/env bash
 printf 'rocm stub precision=%s\n' "${TREE_HMM_PRECISIONS}"
 EOF
-cache_identity="$({
-  echo 'parallel-phylogenetics-benchmark-schema=8'
-  echo 'benchmark-profile=curated'
-  echo 'accelerator-backend=cuda'
-  echo 'hardware=test-hardware'
-  echo 'resume-scope=hardware-class'
-  echo 'session-identity=not-included'
-  echo "host-cpu=$(grep -m1 -E 'model name|Hardware' /proc/cpuinfo 2>/dev/null || uname -m)"
-  echo 'precisions=FP32'
-  echo 'sections=fish pandit'
-  echo 'modes=full-input-update'
-  echo 'synthetic-modes=full-input-update factor-update fixed-model'
-  echo 'fish-modes=full-input-update'
-  echo 'pandit-modes=full-input-update'
-  echo 'task-modes=full-input-update'
-  echo 'jc69-modes=full-input-update'
-  echo 'jc69-profile=paper'
-  echo 'jc69-topologies-override=unset'
-  echo 'jc69-leaves-override=unset'
-  echo 'jc69-raw-sites-override=unset'
-  echo 'jc69-heights-override=unset'
-  echo 'jc69-replicates-override=unset'
-  echo 'jc69-seed=20260814'
-  echo 'jc69-minimum-repeats-override=unset'
-  echo 'jc69-maximum-repeats-override=unset'
-  echo 'jc69-work-budget-override=unset'
-  echo 'jc69-minimum-site-batch=128'
-  echo 'empirical-modes=full-input-update'
-  echo 'empirical-manifests=none'
-  echo 'pandit-limit=25'
-  echo 'repeats=15'
-  echo 'empirical-repeats=3'
-  echo 'empirical-minimum-branch-length=0.000001'
-  echo 'conditioning-ms=0'
-  echo 'beagle-version-label=4.1.0-pre-release-d1e9c62'
-  echo 'beagle-source-revision=d1e9c62f922cf544fda4555aedf113519367c07a'
-  echo 'beagle-source-url=https://github.com/beagle-dev/beagle-lib/archive/d1e9c62f922cf544fda4555aedf113519367c07a.tar.gz'
-  echo 'beagle-source-sha256=55da832b6cde0e65872926b312fcc9f2b03c719b2ebdaabc309e2581c5725705'
-  echo 'beagle-build-jobs=1'
-  echo 'beagle-cmake-build-opencl=OFF'
-  echo 'beagle-cmake-build-jni=OFF'
-  echo 'beagle-cmake-build-openmp=OFF'
-  echo 'beagle-cmake-build-bit=OFF'
-  echo 'beagle-cpu-threads=1 1'
-  echo 'fish-minimum-site-batch=256'
-  echo 'host-memory-guard-percent=75'
-  echo 'host-memory-guard-kib=automatic'
-  echo 'pandit-minimum-leaves=100'
-  echo 'distribution-topologies=yule beta-critical uniform caterpillar'
-  echo 'distribution-leaves=128 512 2048 8192'
-  echo 'distribution-patterns=16 64 256 1024'
-  echo 'distribution-replicates=30'
-  echo 'distribution-seed=20260813'
-  echo 'distribution-timing-repeats=5'
-  echo 'sanitizer-tools=memcheck racecheck synccheck'
-  echo 'skip-sanitizer=0'
-  sort "${source_root}/SOURCE_REVISIONS.txt"
-} | shasum -a 256 | awk '{ print $1 }')"
-printf '# cache_identity sha256=%s\nprevious-row\n' "${cache_identity}" > \
+export TREE_HMM_SKIP_BENCHMARKS=1
+export TREE_HMM_BENCHMARK_SECTIONS="fish pandit"
+TREE_HMM_NOTEBOOK_INPUT_DIR="${launcher_root}/input" \
+TREE_HMM_NOTEBOOK_WORKING_DIR="${working_root}" \
+TREE_HMM_PRECISIONS_OVERRIDE=FP32 TREE_HMM_SKIP_FISH_TREE=1 \
+TREE_HMM_BENCHMARK_SECTIONS="fish pandit" \
+TREE_HMM_HARDWARE_IDENTITY_OVERRIDE=test-hardware \
+TREE_HMM_RESUME_SCOPE=hardware-class \
+TREE_HMM_BEAGLE_CPU_THREADS='1 1' \
+BEAGLE_BUILD_JOBS=1 \
+  bash "${root}/scripts/kaggle_cuda_notebook.sh" "${source_root}" \
+  > "${launcher_root}/seed.log"
+grep -Fq '# correctness_gate_complete benchmark_rows=0 task_rows=0' \
+  "${working_root}/parallel_phylogenetics_cuda_report.txt"
+grep -Fq '# benchmark_suite_complete backend=cuda' \
+  "${working_root}/parallel_phylogenetics_cuda_report.txt"
+printf 'previous-row\n' >> \
+  "${working_root}/parallel_phylogenetics_cuda_report.txt"
+cp "${working_root}/parallel_phylogenetics_cuda_report.txt" \
   "${source_root}/PREVIOUS_BENCHMARK_REPORT.txt"
+rm "${working_root}/parallel_phylogenetics_cuda_report.txt"
 TREE_HMM_NOTEBOOK_INPUT_DIR="${launcher_root}/input" \
 TREE_HMM_NOTEBOOK_WORKING_DIR="${working_root}" \
 TREE_HMM_PRECISIONS_OVERRIDE=FP32 TREE_HMM_SKIP_FISH_TREE=1 \
@@ -657,6 +729,53 @@ grep -Fq 'no prior report matches the current source identity' \
   "${launcher_root}/different-protocol.log"
 ! grep -Fq 'previous-row' \
   "${different_protocol_working}/parallel_phylogenetics_cuda_report.txt"
+different_batches_working="${launcher_root}/different-batches-working"
+mkdir -p "${different_batches_working}"
+TREE_HMM_NOTEBOOK_INPUT_DIR="${launcher_root}/input" \
+TREE_HMM_NOTEBOOK_WORKING_DIR="${different_batches_working}" \
+TREE_HMM_PRECISIONS_OVERRIDE=FP32 TREE_HMM_SKIP_FISH_TREE=1 \
+TREE_HMM_BENCHMARK_SECTIONS="fish pandit" \
+TREE_HMM_HARDWARE_IDENTITY_OVERRIDE=test-hardware \
+TREE_HMM_RESUME_SCOPE=hardware-class \
+TREE_HMM_BEAGLE_CPU_THREADS='1 1' \
+TREE_HMM_EMPIRICAL_SITE_BATCHES='512 2048' \
+  bash "${root}/scripts/kaggle_cuda_notebook.sh" "${source_root}" \
+  > "${launcher_root}/different-batches.log"
+grep -Fq 'no prior report matches the current source identity' \
+  "${launcher_root}/different-batches.log"
+! grep -Fq 'previous-row' \
+  "${different_batches_working}/parallel_phylogenetics_cuda_report.txt"
+different_arch_working="${launcher_root}/different-arch-working"
+mkdir -p "${different_arch_working}"
+TREE_HMM_NOTEBOOK_INPUT_DIR="${launcher_root}/input" \
+TREE_HMM_NOTEBOOK_WORKING_DIR="${different_arch_working}" \
+TREE_HMM_PRECISIONS_OVERRIDE=FP32 TREE_HMM_SKIP_FISH_TREE=1 \
+TREE_HMM_BENCHMARK_SECTIONS="fish pandit" \
+TREE_HMM_HARDWARE_IDENTITY_OVERRIDE=test-hardware \
+TREE_HMM_RESUME_SCOPE=hardware-class TREE_HMM_CUDA_ARCH=70 \
+TREE_HMM_BEAGLE_CPU_THREADS='1 1' \
+  bash "${root}/scripts/kaggle_cuda_notebook.sh" "${source_root}" \
+  > "${launcher_root}/different-arch.log"
+grep -Fq 'no prior report matches the current source identity' \
+  "${launcher_root}/different-arch.log"
+! grep -Fq 'previous-row' \
+  "${different_arch_working}/parallel_phylogenetics_cuda_report.txt"
+failure_working="${launcher_root}/failure-working"
+mkdir -p "${failure_working}"
+if TREE_HMM_NOTEBOOK_INPUT_DIR="${launcher_root}/input" \
+   TREE_HMM_NOTEBOOK_WORKING_DIR="${failure_working}" \
+   TREE_HMM_PRECISIONS_OVERRIDE=FP32 TREE_HMM_SKIP_FISH_TREE=1 \
+   TREE_HMM_BENCHMARK_SECTIONS="fish pandit" \
+   TREE_HMM_HARDWARE_IDENTITY_OVERRIDE=test-hardware \
+   TREE_HMM_RESUME_SCOPE=hardware-class TREE_HMM_CUDA_ARCH=75 \
+   TREE_HMM_BEAGLE_CPU_THREADS='1 1' TREE_HMM_TEST_STUB_FAILURE=1 \
+   bash "${root}/scripts/kaggle_cuda_notebook.sh" "${source_root}" \
+     > "${launcher_root}/failure.log" 2>&1; then
+  echo "launcher accepted a failed benchmark suite" >&2
+  exit 1
+fi
+! grep -Fq '# benchmark_suite_complete' \
+  "${failure_working}/parallel_phylogenetics_cuda_report.txt"
 TREE_HMM_NOTEBOOK_INPUT_DIR="${launcher_root}/input" \
 TREE_HMM_NOTEBOOK_WORKING_DIR="${working_root}" \
 TREE_HMM_ACCELERATOR_BACKEND_OVERRIDE=rocm \

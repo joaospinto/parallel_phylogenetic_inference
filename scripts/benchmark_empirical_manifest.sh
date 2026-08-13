@@ -78,15 +78,8 @@ awk -v value="${minimum_branch_length}" \
   echo "TREE_HMM_EMPIRICAL_MINIMUM_BRANCH_LENGTH must be nonnegative" >&2
   exit 2
 }
-host_memory_guard_kib="${TREE_HMM_HOST_MEMORY_GUARD_KIB:-}"
-if [[ -z "${host_memory_guard_kib}" ]]; then
-  host_memory_guard_kib="$(benchmark_host_memory_guard_kib \
-    "${host_memory_guard_percent}")"
-fi
-[[ "${host_memory_guard_kib}" =~ ^[1-9][0-9]*$ ]] || {
-  echo "TREE_HMM_HOST_MEMORY_GUARD_KIB must be a positive integer" >&2
-  exit 2
-}
+host_memory_guard_kib="$(benchmark_effective_host_memory_guard_kib \
+  "${host_memory_guard_percent}")"
 work_directory="$(mktemp -d "${TMPDIR:-/tmp}/empirical-benchmark.XXXXXX")"
 rows_file="${work_directory}/manifest-rows.tsv"
 trap 'rm -rf "${work_directory}"' EXIT

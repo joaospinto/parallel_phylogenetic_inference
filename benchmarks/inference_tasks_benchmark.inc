@@ -124,6 +124,9 @@ void TimeTask(const char *backend, const char *task, InferenceTask operation,
   cpu.Evaluate(model, update, uniforms);
   const auto accelerator_result = evaluate(accelerator, model, update);
   const TaskErrors errors = compare(cpu, accelerator_result);
+  RequireBenchmarkCorrectness(errors.maximum_absolute,
+                              errors.maximum_relative,
+                              errors.state_mismatches);
 
   const btrc::PlanStatistics statistics = btrc::Statistics(problem.plan);
   const std::size_t primitive_operations =

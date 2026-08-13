@@ -222,38 +222,8 @@ if [[ "${TREE_HMM_SKIP_PORTABILITY_COMPILE_CHECK:-0}" != "1" ]]; then
   fi
 fi
 
-detected_available_host_memory_kib() {
-  local available
-  local candidate
-  local current
-  available="$(awk '/^MemAvailable:/ { print $2; exit }' /proc/meminfo)"
-
-  if [[ -r /sys/fs/cgroup/memory.max &&
-        -r /sys/fs/cgroup/memory.current ]]; then
-    candidate="$(</sys/fs/cgroup/memory.max)"
-    current="$(</sys/fs/cgroup/memory.current)"
-  elif [[ -r /sys/fs/cgroup/memory/memory.limit_in_bytes &&
-          -r /sys/fs/cgroup/memory/memory.usage_in_bytes ]]; then
-    candidate="$(</sys/fs/cgroup/memory/memory.limit_in_bytes)"
-    current="$(</sys/fs/cgroup/memory/memory.usage_in_bytes)"
-  else
-    candidate=""
-    current=""
-  fi
-  if [[ "${candidate}" =~ ^[0-9]+$ && "${current}" =~ ^[0-9]+$ &&
-        "${candidate}" -gt "${current}" ]]; then
-    candidate=$(((candidate - current) / 1024))
-    if [[ "${candidate}" -lt "${available}" ]]; then
-      available="${candidate}"
-    fi
-  fi
-  echo "${available}"
-}
-
 current_host_memory_guard_kib() {
-  local available
-  available="$(detected_available_host_memory_kib)"
-  echo $((available * host_memory_guard_percent / 100))
+  benchmark_effective_host_memory_guard_kib "${host_memory_guard_percent}"
 }
 
 section_selected() {
@@ -454,27 +424,31 @@ for precision in "${precisions[@]}"; do
     "//:${accelerator_benchmark}" "//:${accelerator_test}" \
     "@parallel_tree_hmm//:${accelerator_test}"
 
-  if [[ "${accelerator_backend}" == cuda ]] &&
-     command -v compute-sanitizer >/dev/null 2>&1 &&
-     [[ "${TREE_HMM_SKIP_SANITIZER:-0}" != "1" ]] &&
-     [[ "${validation_completed}" == "0" ]]; then
-    read -r -a sanitizer_tools <<< \
-      "${TREE_HMM_SANITIZER_TOOLS:-memcheck racecheck synccheck}"
-    tree_hmm_native_test="$(find -L bazel-bin/external -type f \
-      -path '*parallel_tree_hmm*' -name "${accelerator_test}" -perm -111 | \
-      head -n 1)"
-    native_tests=("bazel-bin/${accelerator_test}" "${tree_hmm_native_test}")
-    for native_test in "${native_tests[@]}"; do
-      if [[ ! -x "${native_test}" ]]; then
-        echo "could not locate ${native_test}" >&2
-        exit 2
-      fi
-      for tool in "${sanitizer_tools[@]}"; do
-        echo "=== ${precision} ${accelerator_title} ${tool}: ${native_test} ==="
-        compute-sanitizer --tool "${tool}" --error-exitcode 99 \
-          "${native_test}"
+  if [[ "${accelerator_backend}" == cuda &&
+        "${validation_completed}" == "0" ]]; then
+    if [[ "${TREE_HMM_SKIP_SANITIZER:-0}" == "1" ]]; then
+      echo "# validation_sanitizer_skipped backend=cuda" \
+        "precision=${precision} reason=explicit-override"
+    else
+      tree_hmm_require_compute_sanitizer "${precision}" || exit $?
+      read -r -a sanitizer_tools <<< \
+        "${TREE_HMM_SANITIZER_TOOLS:-memcheck racecheck synccheck}"
+      tree_hmm_native_test="$(find -L bazel-bin/external -type f \
+        -path '*parallel_tree_hmm*' -name "${accelerator_test}" -perm -111 | \
+        head -n 1)"
+      native_tests=("bazel-bin/${accelerator_test}" "${tree_hmm_native_test}")
+      for native_test in "${native_tests[@]}"; do
+        if [[ ! -x "${native_test}" ]]; then
+          echo "could not locate ${native_test}" >&2
+          exit 2
+        fi
+        for tool in "${sanitizer_tools[@]}"; do
+          echo "=== ${precision} ${accelerator_title} ${tool}: ${native_test} ==="
+          compute-sanitizer --tool "${tool}" --error-exitcode 99 \
+            "${native_test}"
+        done
       done
-    done
+    fi
   fi
   if [[ "${validation_completed}" == "0" ]]; then
     echo "# validation_complete backend=${accelerator_backend}" \
@@ -568,7 +542,8 @@ for precision in "${precisions[@]}"; do
         done
       done
     fi
-
+    echo "# benchmark_section_complete section=synthetic" \
+      "backend=${accelerator_backend} precision=${precision}"
   fi
 
   if benchmark_section_enabled distributions; then
@@ -584,6 +559,8 @@ for precision in "${precisions[@]}"; do
         bash "${repo_dir}/scripts/benchmark_synthetic_distributions.sh" \
           --interleave "${interleaved_methods[@]}"
     done
+    echo "# benchmark_section_complete section=distributions" \
+      "backend=${accelerator_backend} precision=${precision}"
   fi
 
   if benchmark_section_enabled jc69; then
@@ -603,6 +580,8 @@ for precision in "${precisions[@]}"; do
         bash "${repo_dir}/scripts/benchmark_jc69_simulations.sh" \
           --interleave "${interleaved_methods[@]}"
     done
+    echo "# benchmark_section_complete section=jc69" \
+      "backend=${accelerator_backend} precision=${precision}"
   fi
 
   if benchmark_section_enabled empirical; then
@@ -621,10 +600,13 @@ for precision in "${precisions[@]}"; do
           TREE_HMM_EMPIRICAL_REPEATS="${empirical_repeats}" \
           TREE_HMM_RESUME_REPORT="${resume_report}" \
           TREE_HMM_HOST_MEMORY_GUARD_PERCENT="${host_memory_guard_percent}" \
+          TREE_HMM_HOST_MEMORY_GUARD_KIB="$(current_host_memory_guard_kib)" \
           bash "${repo_dir}/scripts/benchmark_empirical_manifest.sh" \
             --interleave "${manifest}" "${interleaved_methods[@]}"
       done
     done
+    echo "# benchmark_section_complete section=empirical" \
+      "backend=${accelerator_backend} precision=${precision}"
   fi
 
   if benchmark_section_enabled tasks; then
@@ -635,19 +617,31 @@ for precision in "${precisions[@]}"; do
     echo "# task_sites=256"
     echo "# task_replicates=10"
     echo "# task_seed_base=20260813"
+    echo "# task_baseline=reusable scalar generic tree-HMM CPU algebra in matched precision; BEAGLE has no corresponding recovery-task API"
     tasks_benchmark="${accelerator_backend}_tasks_benchmark"
     "${bazel_command}" build "${precision_args[@]}" \
       "${accelerator_args[@]}" "//:${tasks_benchmark}"
     for benchmark_mode in "${task_benchmark_modes[@]}"; do
       for replicate in {0..9}; do
+        task_progress=$((replicate + 1))
         if benchmark_resume_task_case_completed "${resume_report}" \
           "${accelerator_backend}" "${precision}" yule 2048 256 20260813 \
           "${replicate}" "${benchmark_mode}" reverse-task-representative; then
           echo "# resume_skip_task method=${accelerator_backend}" \
             "precision=${precision} benchmark_mode=${benchmark_mode}" \
             "replicate=${replicate}"
+          echo "# task_progress case=${task_progress}/10 status=resume-skip" \
+            "method=${accelerator_backend} precision=${precision}" \
+            "benchmark_mode=${benchmark_mode} replicate=${replicate}"
           continue
         fi
+        echo "# benchmark_start_task method=${accelerator_backend}" \
+          "precision=${precision} benchmark_mode=${benchmark_mode}" \
+          "study=reverse-task-representative topology=yule leaves=2048" \
+          "sites=256 replicate=${replicate} tasks=4"
+        echo "# task_progress case=${task_progress}/10 status=benchmark" \
+          "method=${accelerator_backend} precision=${precision}" \
+          "benchmark_mode=${benchmark_mode} replicate=${replicate}"
         task_output="$(mktemp "${notebook_work_dir}/task-case.XXXXXX")"
         if "bazel-bin/${tasks_benchmark}" --topology yule --leaves 2048 \
             --sites 256 --seed 20260813 --replicate-start "${replicate}" \
@@ -665,6 +659,8 @@ for precision in "${precisions[@]}"; do
         fi
       done
     done
+    echo "# benchmark_section_complete section=tasks" \
+      "backend=${accelerator_backend} precision=${precision}"
   fi
 
   if benchmark_section_enabled fish &&
@@ -775,6 +771,8 @@ for precision in "${precisions[@]}"; do
       done
     fi
     done
+    echo "# benchmark_section_complete section=fish" \
+      "backend=${accelerator_backend} precision=${precision}"
   fi
 
   if benchmark_section_enabled pandit &&
@@ -813,5 +811,7 @@ for precision in "${precisions[@]}"; do
       done
     fi
     done
+    echo "# benchmark_section_complete section=pandit" \
+      "backend=${accelerator_backend} precision=${precision}"
   fi
 done

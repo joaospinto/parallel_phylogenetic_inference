@@ -22,6 +22,7 @@ sh_test(
         "scripts/plot_synthetic_study.py",
         "scripts/summarize_benchmarks.py",
         "scripts/validate_interleaved_schedule.py",
+        "scripts/verify_benchmark_correctness.py",
         "tests/benchmark_report_fixture.txt",
     ],
 )

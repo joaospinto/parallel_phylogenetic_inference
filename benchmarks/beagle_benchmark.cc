@@ -742,10 +742,7 @@ void RunOne(const BeagleOptions &options, std::size_t replicate) {
     const double relative_error = BeagleMaxRelativeError(
         std::span<const Scalar>(sequential_values),
         std::span<const double>(beagle_values));
-    if (!std::isfinite(absolute_error) || !std::isfinite(relative_error)) {
-      throw std::runtime_error(
-          "benchmark produced a nonfinite per-pattern likelihood or error");
-    }
+    RequireBenchmarkCorrectness(absolute_error, relative_error);
     double sequential_log_likelihood = 0.0;
     double beagle_log_likelihood = 0.0;
     for (std::size_t pattern = 0; pattern < problem.sites; ++pattern) {

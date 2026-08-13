@@ -39,10 +39,7 @@ void RunOne(const parallel_phylogenetics::benchmark::Options &options,
       MaxAbsoluteError(result.cpu_values, result.accelerator_values);
   const double relative_error =
       MaxRelativeError(result.cpu_values, result.accelerator_values);
-  if (!std::isfinite(absolute_error) || !std::isfinite(relative_error)) {
-    throw std::runtime_error(
-        "benchmark produced a nonfinite per-pattern likelihood or error");
-  }
+  RequireBenchmarkCorrectness(absolute_error, relative_error);
   PrintRow(PARALLEL_PHYLOGENETICS_BACKEND_NAME, options, problem, result,
            absolute_error, relative_error);
 }

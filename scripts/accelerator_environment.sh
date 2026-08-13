@@ -9,6 +9,16 @@ tree_hmm_amd_available() {
   [[ -e /dev/kfd ]]
 }
 
+tree_hmm_require_compute_sanitizer() {
+  local precision="$1"
+  if command -v compute-sanitizer >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "# validation_incomplete backend=cuda precision=${precision}" \
+    "reason=compute-sanitizer-unavailable" >&2
+  return 2
+}
+
 tree_hmm_detect_cuda_arch() {
   local architecture="${TREE_HMM_CUDA_ARCH:-}"
   if [[ -z "${architecture}" ]] && tree_hmm_nvidia_available; then

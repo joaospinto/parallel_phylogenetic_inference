@@ -186,6 +186,25 @@ if command -v nproc >/dev/null 2>&1; then
 else
   logical_core_count="$(getconf _NPROCESSORS_ONLN)"
 fi
+one_line_version() {
+  local command_name="$1"
+  if command -v "${command_name}" >/dev/null 2>&1; then
+    { "${command_name}" --version 2>/dev/null || true; } |
+      awk 'NR == 1 { print; exit }'
+  else
+    echo unavailable
+  fi
+}
+host_os_release=unavailable
+if [[ -r /etc/os-release ]]; then
+  host_os_release="$(awk -F= '
+    $1 == "ID" || $1 == "VERSION_ID" { gsub(/\"/, "", $2); printf "%s%s", separator, $2; separator = "," }
+  ' /etc/os-release)"
+fi
+host_cxx_command="${CXX:-c++}"
+host_cxx_version="$(one_line_version "${host_cxx_command}")"
+host_nvcc_version="$(one_line_version nvcc)"
+host_cmake_version="$(one_line_version cmake)"
 cache_identity="$(
   {
     benchmark_profile="${TREE_HMM_BENCHMARK_PROFILE:-curated}"
@@ -202,13 +221,32 @@ cache_identity="$(
       default_task_modes="full-input-update"
       default_pandit_limit=25
     fi
-    echo "parallel-phylogenetics-benchmark-schema=8"
+    echo "parallel-phylogenetics-benchmark-schema=9"
     echo "benchmark-profile=${benchmark_profile}"
     echo "accelerator-backend=${accelerator_backend}"
     echo "hardware=${hardware_identity}"
     echo "resume-scope=${resume_scope}"
     echo "session-identity=${session_identity}"
     echo "host-cpu=$(grep -m1 -E 'model name|Hardware' /proc/cpuinfo 2>/dev/null || uname -m)"
+    echo "host-os=$(uname -s)"
+    echo "host-os-release=${host_os_release}"
+    echo "host-kernel=$(uname -r)"
+    echo "host-architecture=$(uname -m)"
+    echo "host-cxx-command=${host_cxx_command}"
+    echo "host-cxx-version=${host_cxx_version}"
+    echo "host-nvcc-version=${host_nvcc_version}"
+    echo "host-cmake-version=${host_cmake_version}"
+    echo "bazel-version=$(<"${work}/parallel_phylogenetic_inference/.bazelversion")"
+    echo "bazel-command-override=${TREE_HMM_BAZEL:-automatic}"
+    echo "bazel-common-args=${TREE_HMM_BAZEL_COMMON_ARGS:-none}"
+    echo "cc-override=${CC:-automatic}"
+    echo "cxx-override=${CXX:-automatic}"
+    echo "cuda-arch-override=${TREE_HMM_CUDA_ARCH:-automatic}"
+    echo "rocm-arch-override=${TREE_HMM_ROCM_ARCH:-automatic}"
+    echo "cuda-minimum-driver=${TREE_HMM_CUDA_MINIMUM_DRIVER:-525.60.13}"
+    echo "cuda-driver-version-override=${TREE_HMM_CUDA_DRIVER_VERSION_OVERRIDE:-none}"
+    echo "cuda-stub-directory=${CUDA_STUB_DIRECTORY:-automatic}"
+    echo "cuda-driver-library=${CUDA_DRIVER_LIBRARY:-automatic}"
     echo "precisions=${TREE_HMM_PRECISIONS_OVERRIDE:-FP64 FP32}"
     echo "sections=${TREE_HMM_BENCHMARK_SECTIONS:-${default_sections}}"
     echo "modes=${TREE_HMM_BENCHMARK_MODES:-${default_modes}}"
@@ -229,6 +267,7 @@ cache_identity="$(
     echo "jc69-work-budget-override=${TREE_HMM_JC69_TIMING_WORK_BUDGET:-unset}"
     echo "jc69-minimum-site-batch=${TREE_HMM_JC69_MINIMUM_SITE_BATCH:-128}"
     echo "empirical-modes=${TREE_HMM_EMPIRICAL_BENCHMARK_MODES:-full-input-update}"
+    echo "empirical-site-batches=${TREE_HMM_EMPIRICAL_SITE_BATCHES:-256 1024 4096 8192 16384 32768}"
     echo "empirical-manifests=${empirical_manifest_identity}"
     echo "pandit-limit=${PANDIT_LIMIT:-${default_pandit_limit}}"
     echo "repeats=${TREE_HMM_BENCHMARK_REPEATS:-15}"
@@ -257,6 +296,11 @@ cache_identity="$(
     echo "distribution-timing-repeats=${TREE_HMM_DISTRIBUTION_TIMING_REPEATS:-5}"
     echo "sanitizer-tools=${TREE_HMM_SANITIZER_TOOLS:-memcheck racecheck synccheck}"
     echo "skip-sanitizer=${TREE_HMM_SKIP_SANITIZER:-0}"
+    echo "skip-portability-compile-check=${TREE_HMM_SKIP_PORTABILITY_COMPILE_CHECK:-0}"
+    echo "skip-benchmarks=${TREE_HMM_SKIP_BENCHMARKS:-0}"
+    echo "skip-beagle=${TREE_HMM_SKIP_BEAGLE:-0}"
+    echo "skip-fish=${TREE_HMM_SKIP_FISH_TREE:-0}"
+    echo "skip-pandit=${TREE_HMM_SKIP_PANDIT:-0}"
     sort "${work}/SOURCE_REVISIONS.txt"
   } | sha256_stream
 )"
@@ -306,8 +350,38 @@ else
 fi
 
 cd "${work}/parallel_phylogenetic_inference"
+benchmark_profile="${TREE_HMM_BENCHMARK_PROFILE:-curated}"
+if [[ "${benchmark_profile}" == complete ]]; then
+  verification_default_sections="validation synthetic distributions jc69 tasks fish pandit"
+else
+  verification_default_sections="validation synthetic fish pandit"
+fi
+read -r -a requested_verification_sections <<< \
+  "${TREE_HMM_BENCHMARK_SECTIONS:-${verification_default_sections}}"
+effective_verification_sections=()
+for section in "${requested_verification_sections[@]}"; do
+  if [[ "${section}" != validation &&
+        "${TREE_HMM_SKIP_BENCHMARKS:-0}" == 1 ]]; then
+    continue
+  fi
+  if [[ "${section}" == fish && "${TREE_HMM_SKIP_FISH_TREE:-0}" == 1 ]]; then
+    continue
+  fi
+  if [[ "${section}" == pandit && "${TREE_HMM_SKIP_PANDIT:-0}" == 1 ]]; then
+    continue
+  fi
+  effective_verification_sections+=("${section}")
+done
+printf '# benchmark_suite_start backend=%s cache_identity_sha256=%s\n' \
+  "${accelerator_backend}" "${cache_identity}" | tee -a "${report}"
 TREE_HMM_PRECISIONS="${TREE_HMM_PRECISIONS_OVERRIDE:-FP64 FP32}" \
   TREE_HMM_RESUME_REPORT="${report}" \
   TREE_HMM_BENCHMARK_REPEATS="${TREE_HMM_BENCHMARK_REPEATS:-15}" \
   TREE_HMM_EMPIRICAL_REPEATS="${TREE_HMM_EMPIRICAL_REPEATS:-3}" \
   bash "scripts/notebook_${accelerator_backend}.sh" 2>&1 | tee -a "${report}"
+python3 scripts/verify_benchmark_correctness.py "${report}" \
+  --selected-sections "${effective_verification_sections[*]-}" \
+  --selected-precisions "${TREE_HMM_PRECISIONS_OVERRIDE:-FP64 FP32}" | \
+  tee -a "${report}"
+printf '# benchmark_suite_complete backend=%s cache_identity_sha256=%s\n' \
+  "${accelerator_backend}" "${cache_identity}" | tee -a "${report}"

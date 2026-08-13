@@ -24,6 +24,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -834,6 +835,31 @@ inline double MaxRelativeError(std::span<const Scalar> expected,
         error / std::max(1.0, std::abs(reference)));
   }
   return result;
+}
+
+inline constexpr double kMaximumNormalizedError =
+    std::is_same_v<Scalar, float> ? 2e-3 : 1e-10;
+
+inline void RequireBenchmarkCorrectness(double absolute_error,
+                                        double normalized_error,
+                                        std::size_t state_mismatches = 0) {
+  if (!std::isfinite(absolute_error)) {
+    throw std::runtime_error(
+        "benchmark produced a nonfinite descriptive absolute error");
+  }
+  if (!std::isfinite(normalized_error) ||
+      normalized_error > kMaximumNormalizedError) {
+    std::ostringstream message;
+    message << "benchmark normalized error " << normalized_error
+            << " exceeds the " << tree_hmm::kPrecisionName
+            << " acceptance bound " << kMaximumNormalizedError;
+    throw std::runtime_error(message.str());
+  }
+  if (state_mismatches != 0) {
+    throw std::runtime_error("benchmark discrete-state comparison found " +
+                             std::to_string(state_mismatches) +
+                             " mismatch(es)");
+  }
 }
 
 inline void PrintHeader(const char *backend, const std::string &device,

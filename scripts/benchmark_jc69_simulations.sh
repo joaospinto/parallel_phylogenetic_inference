@@ -144,14 +144,11 @@ for method in "${benchmark_methods[@]}"; do
     exit 2
   fi
 done
-host_memory_guard_kib="${TREE_HMM_HOST_MEMORY_GUARD_KIB:-}"
-if [[ -z "${host_memory_guard_kib}" ]]; then
-  if [[ "${dry_run}" == 0 ]]; then
-    host_memory_guard_kib="$(benchmark_host_memory_guard_kib \
-      "${host_memory_guard_percent}")"
-  else
-    host_memory_guard_kib=0
-  fi
+if [[ "${dry_run}" == 0 ]]; then
+  host_memory_guard_kib="$(benchmark_effective_host_memory_guard_kib \
+    "${host_memory_guard_percent}")"
+else
+  host_memory_guard_kib="${TREE_HMM_HOST_MEMORY_GUARD_KIB:-0}"
 fi
 [[ "${host_memory_guard_kib}" =~ ^[0-9]+$ ]] || {
   echo "TREE_HMM_HOST_MEMORY_GUARD_KIB must be a nonnegative integer" >&2
@@ -233,9 +230,6 @@ run_jc69_batch() {
     "timing_repeats=${repeats}"
   jc69_case_unavailable=0
   jc69_final_site_batch="${candidate_site_batch}"
-  if [[ "${dry_run}" == 1 ]]; then
-    return
-  fi
   capacity_dataset="synthetic-jc69-${topology}-${leaves}-${raw_sites}-${evolutionary_height}"
   while true; do
     benchmark_capacity_exhausted=0
@@ -249,6 +243,12 @@ run_jc69_batch() {
         "precision=${precision_label} dataset=${capacity_dataset}" \
         "site_batch=${candidate_site_batch}" \
         "threads=${benchmark_display_threads}"
+    elif [[ "${dry_run}" == 1 ]]; then
+      echo "# dry_run_capacity_candidate method=${benchmark_method}" \
+        "precision=${precision_label} dataset=${capacity_dataset}" \
+        "site_batch=${candidate_site_batch}"
+      jc69_final_site_batch="${candidate_site_batch}"
+      return
     else
       benchmark_capacity_dataset="${capacity_dataset}"
       benchmark_capacity_study=clock-like-jc69-simulation

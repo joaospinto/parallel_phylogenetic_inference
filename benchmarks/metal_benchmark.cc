@@ -31,10 +31,13 @@ void RunOne(const parallel_phylogenetics::benchmark::Options &options,
       [](AlignmentModelView chunk, auto &workspace, InputUpdate update) {
         return metal::LogLikelihoodsPrepared(chunk, workspace, update);
       });
+  const double absolute_error =
+      MaxAbsoluteError(result.cpu_values, result.accelerator_values);
+  const double relative_error =
+      MaxRelativeError(result.cpu_values, result.accelerator_values);
+  RequireBenchmarkCorrectness(absolute_error, relative_error);
   PrintHeader("metal", metal::DeviceDescription(), options, problem);
-  PrintRow("metal", options, problem, result,
-           MaxAbsoluteError(result.cpu_values, result.accelerator_values),
-           MaxRelativeError(result.cpu_values, result.accelerator_values));
+  PrintRow("metal", options, problem, result, absolute_error, relative_error);
 }
 
 } // namespace
