@@ -13,7 +13,6 @@ import argparse
 import csv
 import math
 import re
-import subprocess
 from pathlib import Path
 
 from corpus_common import (
@@ -169,6 +168,17 @@ def main() -> None:
         tree_path = f"{relative}/tree_best.newick"
         log_path = f"{relative}/log_0.txt"
         try:
+            tree_oid = source.blob_oid_optional(tree_path)
+            log_oid = source.blob_oid_optional(log_path)
+            missing = [
+                path
+                for path, oid in ((tree_path, tree_oid), (log_path, log_oid))
+                if oid is None
+            ]
+            if missing:
+                raise ValueError(
+                    "missing required source entry: " + ", ".join(missing)
+                )
             tree_bytes = source.blob(tree_path)
             log_bytes = source.blob(log_path)
             log = log_bytes.decode("utf-8")
@@ -190,7 +200,7 @@ def main() -> None:
             selected[group].append(
                 (rank, directory, tree_text, tree, original_sites, tree_bytes, log_bytes)
             )
-        except (OSError, UnicodeError, ValueError, subprocess.CalledProcessError) as error:
+        except (OSError, UnicodeError, ValueError) as error:
             exclusions.append((rank, relative, str(error)))
 
     rows: list[dict[str, object]] = []

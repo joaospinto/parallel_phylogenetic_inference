@@ -74,7 +74,8 @@ PY
 # matching, collision-safe identifiers, source hashes, and deterministic rank
 # selection without accessing the network.
 mirror="${work}/treebase-mirror"
-mkdir -p "${mirror}/trees/alpha.phy" "${mirror}/trees/mismatch.phy"
+mkdir -p "${mirror}/trees/alpha.phy" "${mirror}/trees/mismatch.phy" \
+  "${mirror}/trees/absent.phy"
 cat > "${work}/mirror.fasta" <<'EOF'
 >taxon1
 ACGTACGT
@@ -101,7 +102,10 @@ EOF
 cat > "${mirror}/trees/mismatch.phy/tree_best.newick" <<'EOF'
 ((taxon1:0.1,taxon2:0.2):0.3,different:0.4);
 EOF
-for directory in alpha.phy mismatch.phy; do
+cat > "${mirror}/trees/absent.phy/tree_best.newick" <<'EOF'
+((taxon1:0.1,taxon2:0.2):0.3,taxon3:0.4);
+EOF
+for directory in alpha.phy mismatch.phy absent.phy; do
   printf 'fixture log\n' > "${mirror}/trees/${directory}/log_0.txt"
   printf 'GTR fixture\n' > "${mirror}/trees/${directory}/model_0.txt"
 done
@@ -124,10 +128,37 @@ root = pathlib.Path(sys.argv[1])
 rows = list(csv.DictReader((root / "manifest.csv").open()))
 excluded = list(csv.DictReader((root / "excluded.csv").open()))
 assert len(rows) == 1 and rows[0]["taxa"] == "3"
-assert len(excluded) == 1 and "taxa differ" in excluded[0]["reason"]
+assert len(excluded) == 2
+reasons = [row["reason"] for row in excluded]
+assert sum("taxa differ" in reason for reason in reasons) == 1
+assert sum(
+    "missing required source entry: trees/absent.phy/absent.phy.tar.gz" in reason
+    for reason in reasons
+) == 1
 assert rows[0]["source_revision"]
 assert "empirical-tree-alignment-pairs" in (root / "corpus_metadata.txt").read_text()
 PY
+
+# Repository/object access failures are infrastructure failures, not reasons
+# to exclude a biological record. Simulate an unavailable promisor blob by
+# removing one committed object from a disposable repository; preparation
+# must fail and preserve Git's diagnostic rather than report zero selections.
+archive_relative=trees/alpha.phy/alpha.phy.tar.gz
+archive_oid="$(git -C "${mirror}" rev-parse "HEAD:${archive_relative}")"
+archive_object="${mirror}/.git/objects/${archive_oid:0:2}/${archive_oid:2}"
+mv "${mirror}/${archive_relative}" "${mirror}/${archive_relative}.missing"
+mv "${archive_object}" "${archive_object}.missing"
+if python3 "${root}/scripts/prepare_treebase_mirror.py" \
+  "${mirror}" "${work}/treebase-missing-blob" --revision "${revision}" \
+  --maximum-datasets 10 --minimum-taxa 2 \
+  >"${work}/missing-blob.stdout" 2>"${work}/missing-blob.stderr"; then
+  echo "TreeBASE preparation unexpectedly accepted an unavailable Git blob" >&2
+  exit 1
+fi
+grep -Fq 'Git repository command failed' "${work}/missing-blob.stderr"
+grep -Fq 'fatal:' "${work}/missing-blob.stderr"
+grep -Fq "${archive_relative}" "${work}/missing-blob.stderr"
+[[ ! -f "${work}/treebase-missing-blob/manifest.csv" ]]
 
 # The RAxML-Grove fixture verifies stratified hash sampling and deterministic
 # JC69 simulation on empirical-style topologies. The binary source is never

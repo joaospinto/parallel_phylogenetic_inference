@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import csv
 import io
-import subprocess
 import tarfile
 from pathlib import Path
 
@@ -86,12 +85,29 @@ def main() -> None:
         log_path = f"{relative}/log_0.txt"
         model_path = f"{relative}/model_0.txt"
         try:
+            archive_oid = source.blob_oid_optional(archive_path)
+            tree_oid = source.blob_oid_optional(tree_path)
+            log_oid = source.blob_oid_optional(log_path)
+            missing = [
+                path
+                for path, oid in (
+                    (archive_path, archive_oid),
+                    (tree_path, tree_oid),
+                    (log_path, log_oid),
+                )
+                if oid is None
+            ]
+            if missing:
+                raise ValueError(
+                    "missing required source entry: " + ", ".join(missing)
+                )
             archive = source.blob(archive_path)
             tree_bytes = source.blob(tree_path)
             log_bytes = source.blob(log_path)
-            try:
+            model_oid = source.blob_oid_optional(model_path)
+            if model_oid is not None:
                 model_bytes = source.blob(model_path)
-            except subprocess.CalledProcessError:
+            else:
                 model_bytes = b""
             alignment_bytes = alignment_from_archive(archive)
             names, sequences = read_fasta_bytes(alignment_bytes)
@@ -136,9 +152,9 @@ def main() -> None:
                     "selection_rank": rank,
                     "source_relative_directory": relative,
                     "source_revision": source.revision,
-                    "source_alignment_blob": source.blob_oid(archive_path),
+                    "source_alignment_blob": archive_oid,
                     "source_alignment_sha256": sha256_bytes(archive),
-                    "source_tree_blob": source.blob_oid(tree_path),
+                    "source_tree_blob": tree_oid,
                     "source_tree_sha256": sha256_bytes(tree_bytes),
                     "source_log_sha256": sha256_bytes(log_bytes),
                     "source_model_sha256": sha256_bytes(model_bytes),
@@ -151,7 +167,7 @@ def main() -> None:
                     ),
                 }
             )
-        except (OSError, UnicodeError, ValueError, subprocess.CalledProcessError) as error:
+        except (OSError, UnicodeError, ValueError) as error:
             exclusions.append((rank, relative, str(error)))
 
     fields = list(rows[0]) if rows else [

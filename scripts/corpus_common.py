@@ -264,6 +264,10 @@ def write_fasta(path: Path, names: list[str], sequences: list[str]) -> None:
                 stream.write(sequence[start : start + 80] + "\n")
 
 
+class GitCommandError(RuntimeError):
+    """A Git metadata/object operation failed; never a corpus exclusion."""
+
+
 class GitRepository:
     """Read immutable blobs from a full or partial Git repository."""
 
@@ -281,10 +285,17 @@ class GitRepository:
     def run(self, *arguments: str, check: bool = True) -> bytes:
         result = subprocess.run(
             ["git", "-C", str(self.path), *arguments],
-            check=check,
+            check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
+        if check and result.returncode != 0:
+            diagnostic = result.stderr.decode("utf-8", errors="replace").strip()
+            command = "git " + " ".join(arguments)
+            raise GitCommandError(
+                f"Git repository command failed ({command}, exit "
+                f"{result.returncode}): {diagnostic or 'no diagnostic'}"
+            )
         return result.stdout
 
     def directories(self, tree: str) -> list[str]:
@@ -300,10 +311,16 @@ class GitRepository:
         return self.run("show", f"{self.revision}:{relative}")
 
     def blob_oid(self, relative: str) -> str:
+        result = self.blob_oid_optional(relative)
+        if result is None:
+            raise FileNotFoundError(relative)
+        return result
+
+    def blob_oid_optional(self, relative: str) -> str | None:
         output = self.run("ls-tree", self.revision, "--", relative).decode()
         fields = output.split(None, 3)
         if len(fields) < 3:
-            raise FileNotFoundError(relative)
+            return None
         return fields[2]
 
 
