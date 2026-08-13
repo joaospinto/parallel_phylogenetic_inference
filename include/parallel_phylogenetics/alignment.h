@@ -53,6 +53,19 @@ struct AlignmentPosteriorView {
   std::span<const Scalar> substitutions;
 };
 
+// Phylogenetic prepared calls use the generic tree-HMM categorical-input
+// lifecycle without redefining it at the application layer.
+using InputUpdate = tree_hmm::CategoricalInputUpdate;
+
+// Aggregate timing for one phylogenetic prepared evaluation. Backend fields
+// are summed over site batches; evaluation_wall_ms additionally includes
+// application-level factor preparation and batching.
+struct PreparedTimings {
+  tree_hmm::AcceleratorTimings backend;
+  double evaluation_wall_ms = 0.0;
+  std::size_t site_batches = 0;
+};
+
 class AlignmentWorkspace {
 public:
   struct Impl;

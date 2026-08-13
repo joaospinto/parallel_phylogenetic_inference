@@ -64,8 +64,16 @@ void Workspace::ReserveMarginals(AlignmentModelView model,
       });
 }
 
+PreparedTimings Workspace::LastTimings() const { return impl_->timings; }
+
 std::span<const Scalar> LogLikelihoodsPrepared(AlignmentModelView model,
                                                Workspace &workspace) {
+  return LogLikelihoodsPrepared(model, workspace, InputUpdate::kAll);
+}
+
+std::span<const Scalar> LogLikelihoodsPrepared(AlignmentModelView model,
+                                               Workspace &workspace,
+                                               InputUpdate update) {
   Workspace::Impl &storage = *workspace.impl_;
   if (storage.sites != model.sites) {
     throw std::invalid_argument(
@@ -75,30 +83,49 @@ std::span<const Scalar> LogLikelihoodsPrepared(AlignmentModelView model,
                              internal::PreparedOperation::kLikelihood, false);
   return internal::LogLikelihoodsPrepared(
       model, storage.batch_capacity, storage.tree_hmm.CategoricalInputs(),
-      [&](tree_hmm::BatchedCategoricalModelView factors) {
+      [&](tree_hmm::BatchedCategoricalModelView factors,
+          InputUpdate batch_update) {
         return tree_hmm::metal::LogPartitionFunctionPrepared(factors,
-                                                             storage.tree_hmm);
+                                                              storage.tree_hmm,
+                                                              batch_update);
       },
-      storage.output);
+      storage.output, update, storage.timings);
 }
 
 AlignmentMaximumView MaximumAPosterioriPrepared(AlignmentModelView model,
                                                 Workspace &workspace) {
+  return MaximumAPosterioriPrepared(model, workspace, InputUpdate::kAll);
+}
+
+AlignmentMaximumView MaximumAPosterioriPrepared(AlignmentModelView model,
+                                                Workspace &workspace,
+                                                InputUpdate update) {
   Workspace::Impl &storage = *workspace.impl_;
   internal::ValidatePrepared(model, storage,
                              internal::PreparedOperation::kMaximum);
   return internal::MaximumAPosterioriPrepared(
       model, storage.tree_hmm.CategoricalInputs(),
-      [&](tree_hmm::BatchedCategoricalModelView factors) {
+      [&](tree_hmm::BatchedCategoricalModelView factors,
+          InputUpdate batch_update) {
         return tree_hmm::metal::MaximumAPosterioriPrepared(factors,
-                                                           storage.tree_hmm);
-      });
+                                                            storage.tree_hmm,
+                                                            batch_update);
+      },
+      update, storage.timings);
 }
 
 AlignmentPosteriorSampleView
 PosteriorSamplePrepared(AlignmentModelView model,
                         std::span<const Scalar> uniforms,
                         Workspace &workspace) {
+  return PosteriorSamplePrepared(model, uniforms, workspace,
+                                 InputUpdate::kAll);
+}
+
+AlignmentPosteriorSampleView
+PosteriorSamplePrepared(AlignmentModelView model,
+                        std::span<const Scalar> uniforms,
+                        Workspace &workspace, InputUpdate update) {
   Workspace::Impl &storage = *workspace.impl_;
   internal::ValidatePrepared(model, storage,
                              internal::PreparedOperation::kSampling);
@@ -106,23 +133,34 @@ PosteriorSamplePrepared(AlignmentModelView model,
       model, uniforms, storage.tree_hmm.CategoricalInputs(),
       [&](std::size_t batch) { return storage.tree_hmm.Uniforms(batch); },
       [&](tree_hmm::BatchedCategoricalModelView factors,
-          std::span<const Scalar> staged_uniforms) {
+          std::span<const Scalar> staged_uniforms, InputUpdate batch_update) {
         return tree_hmm::metal::PosteriorSamplePrepared(
-            factors, staged_uniforms, storage.tree_hmm);
-      });
+            factors, staged_uniforms, storage.tree_hmm,
+            batch_update);
+      },
+      update, storage.timings);
 }
 
 AlignmentPosteriorView PosteriorMarginalsPrepared(AlignmentModelView model,
                                                   Workspace &workspace) {
+  return PosteriorMarginalsPrepared(model, workspace, InputUpdate::kAll);
+}
+
+AlignmentPosteriorView PosteriorMarginalsPrepared(AlignmentModelView model,
+                                                  Workspace &workspace,
+                                                  InputUpdate update) {
   Workspace::Impl &storage = *workspace.impl_;
   internal::ValidatePrepared(model, storage,
                              internal::PreparedOperation::kMarginals);
   return internal::PosteriorMarginalsPrepared(
       model, storage.tree_hmm.CategoricalInputs(),
-      [&](tree_hmm::BatchedCategoricalModelView factors) {
+      [&](tree_hmm::BatchedCategoricalModelView factors,
+          InputUpdate batch_update) {
         return tree_hmm::metal::PosteriorMarginalsPrepared(factors,
-                                                           storage.tree_hmm);
-      });
+                                                            storage.tree_hmm,
+                                                            batch_update);
+      },
+      update, storage.timings);
 }
 
 } // namespace parallel_phylogenetics::metal

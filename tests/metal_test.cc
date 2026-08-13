@@ -14,20 +14,44 @@ int main() {
       [&](parallel_phylogenetics::AlignmentModelView model, std::size_t batch) {
         workspace.Reserve(model, batch);
       },
-      parallel_phylogenetics::metal::LogLikelihoodsPrepared);
+      [](parallel_phylogenetics::AlignmentModelView model, auto &workspace) {
+        return parallel_phylogenetics::metal::LogLikelihoodsPrepared(model,
+                                                                      workspace);
+      });
+  parallel_phylogenetics::test::TestResidentAccelerator(
+      workspace,
+      [&](parallel_phylogenetics::AlignmentModelView model, std::size_t batch) {
+        workspace.Reserve(model, batch);
+      },
+      [](parallel_phylogenetics::AlignmentModelView model, auto &workspace,
+         parallel_phylogenetics::InputUpdate update) {
+        return parallel_phylogenetics::metal::LogLikelihoodsPrepared(
+            model, workspace, update);
+      });
   parallel_phylogenetics::test::TestRecoveryAccelerator(
       workspace,
       [&](parallel_phylogenetics::AlignmentModelView model, std::size_t batch) {
         workspace.ReserveMaximum(model, batch);
       },
-      parallel_phylogenetics::metal::MaximumAPosterioriPrepared,
+      [](parallel_phylogenetics::AlignmentModelView model, auto &workspace) {
+        return parallel_phylogenetics::metal::MaximumAPosterioriPrepared(
+            model, workspace);
+      },
       [&](parallel_phylogenetics::AlignmentModelView model, std::size_t batch) {
         workspace.ReserveSampling(model, batch);
       },
-      parallel_phylogenetics::metal::PosteriorSamplePrepared,
+      [](parallel_phylogenetics::AlignmentModelView model,
+         std::span<const parallel_phylogenetics::Scalar> uniforms,
+         auto &workspace) {
+        return parallel_phylogenetics::metal::PosteriorSamplePrepared(
+            model, uniforms, workspace);
+      },
       [&](parallel_phylogenetics::AlignmentModelView model, std::size_t batch) {
         workspace.ReserveMarginals(model, batch);
       },
-      parallel_phylogenetics::metal::PosteriorMarginalsPrepared);
+      [](parallel_phylogenetics::AlignmentModelView model, auto &workspace) {
+        return parallel_phylogenetics::metal::PosteriorMarginalsPrepared(
+            model, workspace);
+      });
   return 0;
 }

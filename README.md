@@ -66,6 +66,22 @@ categorical observations and call the same backend-neutral tree-HMM
 contraction executor. Repeated prepared calls do not resize numerical
 workspace storage or reconstruct the topology plan.
 
+Prepared calls use the tree-HMM `CategoricalInputUpdate` lifecycle directly.
+The default `kAll` stages observations and numerical factors. After one such
+call, `kFactors` keeps the observations resident while updating the JC69 root,
+emission, and edge factors; this is the relevant mode when tip data are fixed
+but branch lengths or model parameters change. `kNone` reuses both observations
+and factors for a genuinely fixed-model throughput measurement. `LastTimings()`
+returns the summed backend transfer, kernel, download, and call times, the
+application-level evaluation time, and the number of site batches.
+
+Resident reuse applies to one exact site batch. If an alignment exceeds the
+workspace capacity, call `SelectSites`, reserve and stage each selected batch
+with `kAll`, and then measure that batch with `kFactors` or `kNone`. The
+full-alignment convenience call deliberately rejects resident modes when it
+would have to cycle different observations through one capacity-bounded
+buffer; it never labels such transfers as resident execution.
+
 Recovery uses operation-specific workspaces so likelihood-only evaluations do
 not retain unnecessary reverse-pass data. For example, posterior marginals for
 a bounded site batch are evaluated as follows:

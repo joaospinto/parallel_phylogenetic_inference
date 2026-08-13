@@ -57,6 +57,84 @@ void TestAccelerator(Workspace &workspace, Reserve &&reserve,
   }
 }
 
+template <class Workspace, class Reserve, class Evaluate>
+void TestResidentAccelerator(Workspace &workspace, Reserve &&reserve,
+                             Evaluate &&evaluate) {
+  const btrc::Plan plan =
+      btrc::MakePlan(std::vector<std::int64_t>{-1, 0, 0, 1, 1, 2, 2});
+  std::vector<Scalar> lengths{0.1, 0.3, 0.2, 0.4, 0.15, 0.5};
+  const std::vector<btrc::Index> observation_nodes{3, 4, 5, 6};
+  constexpr std::size_t kSites = 5;
+  using N = Nucleotide;
+  std::vector<N> observations{
+      N::kA, N::kC, N::kG, N::kT, N::kC, N::kG, N::kT,
+      N::kA, N::kG, N::kT, N::kA, N::kC, N::kT, N::kA,
+      N::kC, N::kG, N::kA, N::kG, N::kC, N::kT,
+  };
+  const AlignmentModelView model{plan, kSites, lengths, observation_nodes,
+                                 observations};
+  reserve(model, kSites);
+
+  for (const InputUpdate update : {InputUpdate::kFactors,
+                                   InputUpdate::kNone}) {
+    bool rejected = false;
+    try {
+      static_cast<void>(evaluate(model, workspace, update));
+    } catch (const std::logic_error &) {
+      rejected = true;
+    }
+    Check(rejected, "phylogenetic accelerator accepted unstaged inputs");
+  }
+
+  const std::span<const Scalar> initial_view =
+      evaluate(model, workspace, InputUpdate::kAll);
+  const std::vector<Scalar> initial(initial_view.begin(), initial_view.end());
+  observations.front() = N::kT;
+  const std::span<const Scalar> observations_reused =
+      evaluate(model, workspace, InputUpdate::kFactors);
+  Check(std::equal(observations_reused.begin(), observations_reused.end(),
+                   initial.begin()),
+        "phylogenetic accelerator did not reuse observations");
+  const std::span<const Scalar> observations_updated =
+      evaluate(model, workspace, InputUpdate::kAll);
+  const std::vector<Scalar> after_observation_update(observations_updated.begin(),
+                                                     observations_updated.end());
+  Check(!std::equal(after_observation_update.begin(),
+                    after_observation_update.end(), initial.begin()),
+        "phylogenetic accelerator did not update observations");
+
+  lengths.front() *= 1.7f;
+  const std::span<const Scalar> factors_reused =
+      evaluate(model, workspace, InputUpdate::kNone);
+  Check(std::equal(factors_reused.begin(), factors_reused.end(),
+                   after_observation_update.begin()),
+        "phylogenetic accelerator did not reuse factors");
+  const std::span<const Scalar> factors_updated =
+      evaluate(model, workspace, InputUpdate::kFactors);
+  Check(!std::equal(factors_updated.begin(), factors_updated.end(),
+                    after_observation_update.begin()),
+        "phylogenetic accelerator did not update factors");
+
+  const PreparedTimings timings = workspace.LastTimings();
+  Check(timings.site_batches == 1,
+        "resident phylogenetic evaluation used multiple site batches");
+  Check(timings.backend.upload_ms >= 0.0 && timings.backend.kernel_ms >= 0.0 &&
+            timings.backend.download_ms >= 0.0 &&
+            timings.backend.wall_ms >= 0.0 &&
+            timings.evaluation_wall_ms >= timings.backend.wall_ms,
+        "phylogenetic accelerator timings are invalid");
+
+  reserve(model, 2);
+  bool chunked_reuse_rejected = false;
+  try {
+    static_cast<void>(evaluate(model, workspace, InputUpdate::kFactors));
+  } catch (const std::invalid_argument &) {
+    chunked_reuse_rejected = true;
+  }
+  Check(chunked_reuse_rejected,
+        "phylogenetic accelerator treated a chunked alignment as resident");
+}
+
 template <class Workspace, class ReserveMaximum, class Maximum,
           class ReserveSampling, class Sample, class ReserveMarginals,
           class Marginals>

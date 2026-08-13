@@ -33,16 +33,21 @@ public:
   void ReserveMarginals(AlignmentModelView model,
                         std::size_t site_batch_capacity = 0, int device = 0);
 
+  PreparedTimings LastTimings() const;
+
 private:
   friend std::span<const Scalar> LogLikelihoodsPrepared(AlignmentModelView,
-                                                        Workspace &);
+                                                        Workspace &,
+                                                        InputUpdate);
   friend AlignmentMaximumView MaximumAPosterioriPrepared(AlignmentModelView,
-                                                         Workspace &);
+                                                         Workspace &,
+                                                         InputUpdate);
   friend AlignmentPosteriorSampleView
   PosteriorSamplePrepared(AlignmentModelView, std::span<const Scalar>,
-                          Workspace &);
+                          Workspace &, InputUpdate);
   friend AlignmentPosteriorView PosteriorMarginalsPrepared(AlignmentModelView,
-                                                           Workspace &);
+                                                           Workspace &,
+                                                           InputUpdate);
   std::unique_ptr<Impl> impl_;
 };
 
@@ -52,6 +57,9 @@ private:
 // destruction.
 std::span<const Scalar> LogLikelihoodsPrepared(AlignmentModelView model,
                                                Workspace &workspace);
+std::span<const Scalar> LogLikelihoodsPrepared(AlignmentModelView model,
+                                               Workspace &workspace,
+                                               InputUpdate update);
 
 // The recovery functions evaluate the supplied alignment view as one batch;
 // its site count must not exceed the reserved capacity. Use SelectSites to
@@ -59,10 +67,19 @@ std::span<const Scalar> LogLikelihoodsPrepared(AlignmentModelView model,
 // workspace and remain valid until its next evaluation or reservation.
 AlignmentMaximumView MaximumAPosterioriPrepared(AlignmentModelView model,
                                                 Workspace &workspace);
+AlignmentMaximumView MaximumAPosterioriPrepared(AlignmentModelView model,
+                                                Workspace &workspace,
+                                                InputUpdate update);
 AlignmentPosteriorSampleView
 PosteriorSamplePrepared(AlignmentModelView model,
                         std::span<const Scalar> uniforms, Workspace &workspace);
+AlignmentPosteriorSampleView PosteriorSamplePrepared(
+    AlignmentModelView model, std::span<const Scalar> uniforms,
+    Workspace &workspace, InputUpdate update);
 AlignmentPosteriorView PosteriorMarginalsPrepared(AlignmentModelView model,
                                                   Workspace &workspace);
+AlignmentPosteriorView PosteriorMarginalsPrepared(AlignmentModelView model,
+                                                  Workspace &workspace,
+                                                  InputUpdate update);
 
 } // namespace parallel_phylogenetics::PARALLEL_PHYLOGENETICS_GPU_NAMESPACE
