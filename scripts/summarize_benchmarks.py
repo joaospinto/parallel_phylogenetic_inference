@@ -161,23 +161,40 @@ def write_corpus(rows: list[dict[str, object]], accelerator: str) -> None:
     for row in rows:
         key = tuple(str(row[field]) for field in PROBLEM)
         by_problem[key][str(row["method"])] = row
-    pairs = [
-        (methods[accelerator], methods["beagle_cpu"])
+    native = [
+        methods[accelerator]
         for methods in by_problem.values()
-        if accelerator in methods and "beagle_cpu" in methods
+        if accelerator in methods
     ]
-    if not pairs:
+    if not native:
         raise ValueError(
-            f"no matched {accelerator} and beagle_cpu benchmark records found"
+            f"no {accelerator} benchmark records found"
         )
-    speedups = [
-        float(beagle["total_ms"]) / float(native["total_ms"])
-        for native, beagle in pairs
-    ]
+    comparisons: dict[str, list[float]] = {
+        f"{accelerator}/conventional": [
+            float(row["cpu_ms"]) / float(row["total_ms"]) for row in native
+        ]
+    }
+    for beagle_method in ("beagle_cpu", "beagle_cuda"):
+        pairs = [
+            (methods[accelerator], methods[beagle_method])
+            for methods in by_problem.values()
+            if accelerator in methods and beagle_method in methods
+        ]
+        if not pairs:
+            continue
+        comparisons[f"{beagle_method}/conventional"] = [
+            float(beagle["cpu_ms"]) / float(beagle["total_ms"])
+            for _, beagle in pairs
+        ]
+        comparisons[f"{accelerator}/{beagle_method}"] = [
+            float(beagle["total_ms"]) / float(native["total_ms"])
+            for native, beagle in pairs
+        ]
     writer = csv.writer(sys.stdout)
     writer.writerow(
         [
-            "accelerator",
+            "comparison",
             "problems",
             "wins",
             "min_speedup",
@@ -186,25 +203,48 @@ def write_corpus(rows: list[dict[str, object]], accelerator: str) -> None:
             "max_speedup",
         ]
     )
-    writer.writerow(
-        [
-            accelerator,
-            len(speedups),
-            sum(value > 1.0 for value in speedups),
-            min(speedups),
-            statistics.median(speedups),
-            percentile(speedups, 0.9),
-            max(speedups),
-        ]
-    )
+    for comparison, speedups in comparisons.items():
+        writer.writerow(
+            [
+                comparison,
+                len(speedups),
+                sum(value > 1.0 for value in speedups),
+                min(speedups),
+                statistics.median(speedups),
+                percentile(speedups, 0.9),
+                max(speedups),
+            ]
+        )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("logs", nargs="+", type=Path)
     parser.add_argument("--corpus", choices=("cuda", "metal"))
+    parser.add_argument("--dataset-prefix")
+    parser.add_argument("--precision", choices=("FP32", "FP64"))
     arguments = parser.parse_args()
-    rows = best_batches(aggregate(records(arguments.logs)))
+    raw_rows = records(arguments.logs)
+    if arguments.dataset_prefix is not None:
+        raw_rows = [
+            row
+            for row in raw_rows
+            if row["dataset"].startswith(arguments.dataset_prefix)
+        ]
+        if not raw_rows:
+            raise ValueError(
+                "no benchmark records match dataset prefix "
+                f"{arguments.dataset_prefix!r}"
+            )
+    if arguments.precision is not None:
+        raw_rows = [
+            row for row in raw_rows if row["precision"] == arguments.precision
+        ]
+        if not raw_rows:
+            raise ValueError(
+                f"no benchmark records use precision {arguments.precision}"
+            )
+    rows = best_batches(aggregate(raw_rows))
     if arguments.corpus:
         write_corpus(rows, arguments.corpus)
     else:
