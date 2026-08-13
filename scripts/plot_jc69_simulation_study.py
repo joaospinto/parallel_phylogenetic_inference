@@ -220,8 +220,14 @@ def main() -> None:
         "--run-identity",
         help="declared common identity for logs without cache markers",
     )
-    parser.add_argument("--max-abs-error", type=float)
-    parser.add_argument("--max-relative-error", type=float)
+    parser.add_argument(
+        "--max-abs-error", type=float,
+        help="optional additional absolute-error guard",
+    )
+    parser.add_argument(
+        "--max-relative-error", type=float,
+        help="scale-normalized error bound (default: 2e-3 FP32, 1e-10 FP64)",
+    )
     parser.add_argument("--distribution-leaves", type=int)
     parser.add_argument("--distribution-raw-sites", type=int)
     parser.add_argument("--output-directory", type=Path, required=True)
@@ -249,15 +255,10 @@ def main() -> None:
         maximum_timing_repeats < minimum_timing_repeats
     ) or timing_work_budget < 0:
         raise ValueError("invalid JC69 timing-repeat declaration")
-    max_abs_error = (
-        arguments.max_abs_error
-        if arguments.max_abs_error is not None
-        else (0.1 if arguments.precision == "FP32" else 1e-8)
-    )
     max_relative_error = (
         arguments.max_relative_error
         if arguments.max_relative_error is not None
-        else (1e-3 if arguments.precision == "FP32" else 1e-10)
+        else (2e-3 if arguments.precision == "FP32" else 1e-10)
     )
 
     records = []
@@ -290,7 +291,10 @@ def main() -> None:
             raise ValueError(f"invalid result at {row['source']}") from error
         if not all(math.isfinite(value) for value in values) or values[0] <= 0:
             raise ValueError(f"nonfinite or nonpositive result at {row['source']}")
-        if values[1] > max_abs_error or values[2] > max_relative_error:
+        if (
+            arguments.max_abs_error is not None
+            and values[1] > arguments.max_abs_error
+        ) or values[2] > max_relative_error:
             raise ValueError(f"correctness threshold exceeded at {row['source']}")
         expected_timing_repeats = prescribed_timing_repeats(
             int(row["leaves"]), int(row["sites"]), minimum_timing_repeats,

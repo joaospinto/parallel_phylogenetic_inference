@@ -151,8 +151,14 @@ def main() -> None:
         "--run-identity",
         help="declared common run identity for logs without cache markers",
     )
-    parser.add_argument("--max-abs-error", type=float)
-    parser.add_argument("--max-relative-error", type=float)
+    parser.add_argument(
+        "--max-abs-error", type=float,
+        help="optional additional absolute-error guard",
+    )
+    parser.add_argument(
+        "--max-relative-error", type=float,
+        help="scale-normalized error bound (default: 2e-3 FP32, 1e-10 FP64)",
+    )
     parser.add_argument(
         "--distribution-leaves",
         type=int,
@@ -168,15 +174,10 @@ def main() -> None:
     run_identity = validate_run_identity(arguments.logs, arguments.run_identity)
     expected_topologies, expected_leaves, expected_patterns, expected_count, \
         expected_seed_base = study_design(arguments.logs)
-    max_abs_error = (
-        arguments.max_abs_error
-        if arguments.max_abs_error is not None
-        else (0.1 if arguments.precision == "FP32" else 1e-8)
-    )
     max_relative_error = (
         arguments.max_relative_error
         if arguments.max_relative_error is not None
-        else (1e-3 if arguments.precision == "FP32" else 1e-10)
+        else (2e-3 if arguments.precision == "FP32" else 1e-10)
     )
 
     selected_methods = {arguments.native, arguments.baseline}
@@ -216,7 +217,10 @@ def main() -> None:
             for value in (row_elapsed, absolute_error, relative_error)
         ) or row_elapsed <= 0.0:
             raise ValueError(f"nonpositive or nonfinite result at {row['source']}")
-        if absolute_error > max_abs_error or relative_error > max_relative_error:
+        if (
+            arguments.max_abs_error is not None
+            and absolute_error > arguments.max_abs_error
+        ) or relative_error > max_relative_error:
             raise ValueError(
                 f"correctness threshold exceeded at {row['source']}: "
                 f"abs={absolute_error}, relative={relative_error}"

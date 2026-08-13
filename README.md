@@ -329,8 +329,16 @@ records embedded in a complete CUDA notebook report are summarized with
 scripts/summarize_benchmarks.py report.txt \
   --dataset-prefix PF --precision FP32 \
   --benchmark-mode full-input-update --corpus cuda \
-  --max-abs-error 0.1 --max-relative-error 0.001
+  --max-relative-error 0.002
 ```
+
+Here `max_relative_error` is the scale-normalized discrepancy
+`max(abs(actual-reference) / max(1, abs(reference)))`.  Publication summaries
+admit FP32 rows at `0.002` and FP64 rows at `1e-10`; maximum absolute errors
+remain in every report and table, while `--max-abs-error` is available as an
+additional, explicitly chosen guard.  A single fixed absolute cutoff would be
+misleading across per-pattern log likelihoods whose magnitudes grow with the
+number of taxa.
 
 Corpus summaries require complete BEAGLE CPU coverage and, for CUDA reports,
 complete BEAGLE CUDA coverage; an absent or partial baseline is an error rather

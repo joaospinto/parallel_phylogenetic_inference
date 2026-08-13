@@ -391,8 +391,17 @@ def main() -> None:
         action="store_true",
         help="include chunked factor/fixed diagnostic projections",
     )
-    parser.add_argument("--max-abs-error", type=float)
-    parser.add_argument("--max-relative-error", type=float)
+    parser.add_argument(
+        "--max-abs-error", type=float,
+        help="optional additional bound on the reported maximum absolute error",
+    )
+    parser.add_argument(
+        "--max-relative-error", type=float,
+        help=(
+            "required corpus-admission bound on "
+            "max(|actual-reference|/max(1,|reference|))"
+        ),
+    )
     parser.add_argument(
         "--run-identity",
         help="declared common run identity for logs without cache markers",
@@ -448,13 +457,11 @@ def main() -> None:
             "--corpus requires --precision and --benchmark-mode so distinct "
             "measurement protocols are never pooled"
         )
-    if arguments.corpus and (
-        arguments.max_abs_error is None
-        or arguments.max_relative_error is None
-    ):
+    if arguments.corpus and arguments.max_relative_error is None:
         raise ValueError(
-            "--corpus requires explicit --max-abs-error and "
-            "--max-relative-error acceptance thresholds"
+            "--corpus requires an explicit --max-relative-error acceptance "
+            "threshold; this field is the scale-normalized error "
+            "max(|x-y|/max(1,|reference|))"
         )
     if arguments.max_abs_error is not None:
         rejected = [

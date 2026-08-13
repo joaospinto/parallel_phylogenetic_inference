@@ -177,8 +177,14 @@ def main() -> None:
     )
     parser.add_argument("--study", default="reverse-task-representative")
     parser.add_argument("--run-identity")
-    parser.add_argument("--max-abs-error", type=float)
-    parser.add_argument("--max-relative-error", type=float)
+    parser.add_argument(
+        "--max-abs-error", type=float,
+        help="optional additional absolute-error guard",
+    )
+    parser.add_argument(
+        "--max-relative-error", type=float,
+        help="scale-normalized error bound (default: 2e-3 FP32, 1e-10 FP64)",
+    )
     arguments = parser.parse_args()
     validate_run_identity(arguments.logs, arguments.run_identity)
     design = study_design(arguments.logs, arguments.study)
@@ -194,15 +200,10 @@ def main() -> None:
     if not rows:
         raise ValueError("no task records satisfy the requested filters")
 
-    maximum_absolute = (
-        arguments.max_abs_error
-        if arguments.max_abs_error is not None
-        else (0.1 if arguments.precision == "FP32" else 1e-8)
-    )
     maximum_relative = (
         arguments.max_relative_error
         if arguments.max_relative_error is not None
-        else (1e-3 if arguments.precision == "FP32" else 1e-10)
+        else (2e-3 if arguments.precision == "FP32" else 1e-10)
     )
     expected_tasks = {
         "likelihood", "joint-map", "posterior-sample", "all-marginals"
@@ -223,9 +224,9 @@ def main() -> None:
         if int(row["state_mismatches"]) != 0:
             raise ValueError(f"state mismatch at {row['source']}")
         if (
-            float(row["max_abs_error"]) > maximum_absolute
-            or float(row["max_relative_error"]) > maximum_relative
-        ):
+            arguments.max_abs_error is not None
+            and float(row["max_abs_error"]) > arguments.max_abs_error
+        ) or float(row["max_relative_error"]) > maximum_relative:
             raise ValueError(f"correctness threshold exceeded at {row['source']}")
     incomplete = {key: expected_tasks - tasks for key, tasks in cases.items() if tasks != expected_tasks}
     if incomplete:

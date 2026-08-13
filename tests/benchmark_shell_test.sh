@@ -129,6 +129,24 @@ python3 "${root}/scripts/summarize_benchmarks.py" "${coverage_report}" \
   "${work_directory}/coverage-summary.csv"
 grep -Fq 'cuda/beagle_cpu_1t' "${work_directory}/coverage-summary.csv"
 
+scale_aware_report="${work_directory}/scale-aware-report.txt"
+cat > "${scale_aware_report}" <<'EOF'
+backend,precision,benchmark_mode,study,dataset,topology,leaves,nodes,sites,unique_patterns,site_batch,cpu_ms,measured_total_ms,max_abs_error,max_relative_error
+metal,FP32,full-input-update,scale-aware,large-log-factor,empirical,87282,174563,512,512,512,2,1,1.9,0.0002
+baseline,beagle_resource,precision,benchmark_mode,study,dataset,topology,leaves,nodes,sites,unique_patterns,site_batch,threads,sequential_ms,beagle_total_ms,max_abs_error,max_relative_error
+beagle,cpu,FP32,full-input-update,scale-aware,large-log-factor,empirical,87282,174563,512,512,512,1,2,1.5,1.9,0.0002
+EOF
+python3 "${root}/scripts/summarize_benchmarks.py" "${scale_aware_report}" \
+  --corpus metal --precision FP32 --benchmark-mode full-input-update \
+  --max-relative-error 0.002 >/dev/null
+if python3 "${root}/scripts/summarize_benchmarks.py" \
+     "${scale_aware_report}" --corpus metal --precision FP32 \
+     --benchmark-mode full-input-update --max-abs-error 0.1 \
+     --max-relative-error 0.002 >/dev/null 2>&1; then
+  echo "optional absolute-error guard was not enforced" >&2
+  exit 1
+fi
+
 manifest_directory="${work_directory}/generic-corpus"
 mkdir -p "${manifest_directory}"
 for name in small.fa small.weights small.nwk large.fa large.weights large.nwk; do
