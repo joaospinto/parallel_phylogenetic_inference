@@ -70,21 +70,25 @@ BeagleOptions ParseBeagleOptions(int argc, char **argv) {
   return result;
 }
 
+std::string BeagleError(int code) {
+  std::string result = "BEAGLE error " + std::to_string(code);
+  if (code == BEAGLE_ERROR_OUT_OF_MEMORY)
+    result += " (out of memory)";
+  return result;
+}
+
 void CheckBeagle(int code, const char *operation) {
-  if (code != BEAGLE_SUCCESS) {
-    throw std::runtime_error(std::string(operation) +
-                             " failed with BEAGLE error " +
-                             std::to_string(code));
-  }
+  if (code != BEAGLE_SUCCESS)
+    throw std::runtime_error(std::string(operation) + " failed with " +
+                             BeagleError(code));
 }
 
 class BeagleInstance {
 public:
   explicit BeagleInstance(int instance) : instance_(instance) {
-    if (instance_ < 0) {
-      throw std::runtime_error("beagleCreateInstance failed with error " +
-                               std::to_string(instance_));
-    }
+    if (instance_ < 0)
+      throw std::runtime_error("beagleCreateInstance failed with " +
+                               BeagleError(instance_));
   }
 
   ~BeagleInstance() {

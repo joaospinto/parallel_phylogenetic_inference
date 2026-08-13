@@ -21,6 +21,7 @@ limit="${PANDIT_LIMIT:-0}"
 repeats="${TREE_HMM_EMPIRICAL_REPEATS:-3}"
 conditioning_ms="${TREE_HMM_BENCHMARK_CONDITIONING_MS:-0}"
 threads="${BEAGLE_THREADS:-1}"
+resume_report="${TREE_HMM_RESUME_REPORT:-}"
 for value in "${minimum_leaves}" "${repeats}" "${threads}"; do
   if [[ ! "${value}" =~ ^[1-9][0-9]*$ ]]; then
     echo "leaf, repeat, and thread counts must be positive integers" >&2
@@ -37,10 +38,17 @@ if [[ "${precision}" != fp32 && "${precision}" != fp64 ]]; then
   echo "PRECISION must be fp32 or fp64" >&2
   exit 2
 fi
+if [[ -n "${resume_report}" && ! -r "${resume_report}" ]]; then
+  echo "TREE_HMM_RESUME_REPORT is not readable: ${resume_report}" >&2
+  exit 2
+fi
+
+script_directory="${repository}/scripts"
+# shellcheck source=scripts/benchmark_resume.sh
+source "${script_directory}/benchmark_resume.sh"
 
 case "${backend}" in
   beagle-cpu|beagle-cuda)
-    script_directory="${repository}/scripts"
     # shellcheck source=scripts/beagle_environment.sh
     source "${script_directory}/beagle_environment.sh"
     parallel_phylogenetics_configure_beagle
@@ -81,6 +89,7 @@ echo "# manifest=${manifest}"
 echo "# minimum_leaves=${minimum_leaves}"
 echo "# family_limit=${limit}"
 selected=0
+precision_label="$(tr '[:lower:]' '[:upper:]' <<< "${precision}")"
 while IFS=, read -r family leaves raw_sites selected_sites; do
   family="${family%$'\r'}"
   leaves="${leaves%$'\r'}"
@@ -89,6 +98,13 @@ while IFS=, read -r family leaves raw_sites selected_sites; do
   fi
   if [[ "${limit}" -ne 0 && "${selected}" -ge "${limit}" ]]; then
     break
+  fi
+  if benchmark_resume_dataset_completed "${resume_report}" "${backend}" \
+    "${precision_label}" "${family}"; then
+    echo "# resume_skip method=${backend} precision=${precision_label}" \
+      "dataset=${family}"
+    selected=$((selected + 1))
+    continue
   fi
   arguments=(
     --newick "${families}/${family}.nwk"

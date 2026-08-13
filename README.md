@@ -172,7 +172,7 @@ records embedded in a complete CUDA notebook report are summarized with
 
 ```sh
 scripts/summarize_benchmarks.py report.txt \
-  --dataset-prefix PF --corpus cuda
+  --dataset-prefix PF --precision FP32 --corpus cuda
 ```
 
 The Fish Tree of Life supplies a much larger empirical nucleotide case with
@@ -189,7 +189,12 @@ the host and emulated-kernel tests, validates the native CUDA implementation
 with Compute Sanitizer, and then runs the same balanced and caterpillar sweep.
 It additionally compares against pinned BEAGLE 4.0.1 on the CPU and CUDA
 device and evaluates the 325-family PANDIT subset and complete Fish Tree of
-Life alignment in matched FP64 and FP32.
+Life alignment in matched FP64 and FP32. For capacity-bounded alignment runs,
+each method tries geometrically increasing site batches up to the complete
+alignment. Device-allocation failures stop only the affected CUDA sweep. CPU
+capacity probes run under a ceiling derived from the runtime memory limit, so
+an oversized probe fails in its child process rather than invoking the
+notebook-wide OOM killer. Unrelated failures remain fatal.
 
 Until these repositories are public, create the notebook input bundle from
 clean commits:
@@ -197,6 +202,25 @@ clean commits:
 ```sh
 scripts/package_notebook_sources.sh
 ```
+
+An interrupted run can be resumed without repeating completed configurations
+by embedding its downloaded report in the next source bundle:
+
+```sh
+scripts/package_notebook_sources.sh \
+  ~/worktrees/parallel_phylogenetics_corpora/parallel_tree_inference_sources.zip \
+  previous_parallel_phylogenetics_cuda_report.txt
+```
+
+The notebook recognizes completed validation phases, individual benchmark
+configurations, and PANDIT families from the earlier report and appends only
+the missing results. Its standard run selects the `validation`, `synthetic`,
+`fish`, and `pandit` sections. A notebook-side environment override can select
+any subset without duplicating orchestration, for example
+`TREE_HMM_BENCHMARK_SECTIONS="fish pandit"` together with
+`TREE_HMM_PRECISIONS_OVERRIDE=FP32`. Existing `TREE_HMM_SKIP_*` controls,
+repeat-count overrides, sanitizer controls, and memory-guard overrides remain
+available.
 
 No GitHub remote or push is required for that workflow.
 

@@ -1,0 +1,8 @@
+# validation_complete precision=FP32
+=== FP64 host tests, including CUDA algebra emulation ===
+=== FP64 CUDA scaling benchmark ===
+cuda,FP64,synthetic,balanced,256,511,1024,1024,24,5,0,1,1,1,1,1,1,1,1,1,1,0,0
+beagle,cpu,FP64,synthetic,caterpillar,64,127,256,256,18,5,0,1,1,1,1,1,1,1,1,1,0,0
+cuda,FP64,actinopt_12k_raxml,empirical,11638,23275,24143,2048,43,3,0,1,1,1,1,1,1,1,1,1,1,0,0
+metal,FP32,PF00004,empirical,241,480,648,648,27,5,0,1,1,1,1,1,1,1,1,1,1,0,0
+# capacity_limit method=cuda precision=FP64 first_infeasible_site_batch=4096
