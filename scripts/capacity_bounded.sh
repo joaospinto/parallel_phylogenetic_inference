@@ -39,7 +39,7 @@ benchmark_run_capacity_bounded() {
   output_file="$(mktemp "${work_directory}/batch-run.XXXXXX")"
   if (
       ulimit -c 0
-      if [[ "${method}" == "beagle-cpu" || "$(uname -s)" == Linux ]]; then
+      if [[ "$(uname -s)" == Linux ]]; then
         ulimit -v "${host_memory_guard_kib}"
       fi
       if [[ "${method}" == "beagle-cpu" ]]; then
@@ -58,7 +58,7 @@ benchmark_run_capacity_bounded() {
     capacity_reason=""
     if [[ "${command_status}" -eq 137 ]]; then
       capacity_reason="process-killed"
-    elif [[ "${method}" == "beagle-cpu" &&
+    elif [[ "$(uname -s)" == Linux && "${method}" == "beagle-cpu" &&
             "${command_status}" -eq 139 ]]; then
       capacity_reason="beagle-segfault-under-memory-limit"
     elif grep -Eqi \
@@ -69,6 +69,7 @@ benchmark_run_capacity_bounded() {
     if [[ -n "${capacity_reason}" ]]; then
       echo "# capacity_limit method=${method} precision=${precision}" \
         "dataset=${benchmark_capacity_dataset:-unknown}" \
+        "study=${benchmark_capacity_study:-standard}" \
         "benchmark_mode=${benchmark_capacity_mode:-full-input-update}" \
         "threads=${benchmark_capacity_threads:-none}" \
         "first_infeasible_site_batch=${site_batch}" \

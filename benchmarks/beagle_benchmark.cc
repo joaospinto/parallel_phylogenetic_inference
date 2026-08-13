@@ -361,6 +361,16 @@ public:
 
   double UpdateFactors(AlignmentModelView model) {
     const Clock::time_point begin = Clock::now();
+    if (tree_.edge_lengths.size() != model.branch_lengths.size() &&
+        tree_.edge_lengths.size() != model.branch_lengths.size() + 1) {
+      throw std::invalid_argument("BEAGLE branch-factor shape changed");
+    }
+    for (std::size_t edge = 0; edge < model.branch_lengths.size(); ++edge) {
+      tree_.edge_lengths[edge] = static_cast<double>(
+          model.branch_lengths[edge] * model.substitution_rate);
+    }
+    if (tree_.edge_lengths.size() > model.branch_lengths.size())
+      tree_.edge_lengths.back() = 0.0;
     constexpr std::array<double, 16> kEigenvectors{
         1.0,  2.0, 0.0,  0.5, 1.0, -2.0, 0.5, 0.0,
         1.0,  2.0, 0.0, -0.5, 1.0, -2.0, -0.5, 0.0};

@@ -94,23 +94,61 @@ python3 "${root}/scripts/summarize_benchmarks.py" "${mixed_report}" \
 grep -Fq 'cuda' "${work_directory}/mixed-summary.csv"
 ! grep -Fq 'likelihood' "${work_directory}/mixed-summary.csv"
 
+coverage_report="${work_directory}/coverage-report.txt"
+cat > "${coverage_report}" <<'EOF'
+backend,precision,benchmark_mode,study,dataset,topology,leaves,nodes,sites,unique_patterns,site_batch,cpu_ms,measured_total_ms,max_abs_error,max_relative_error
+cuda,FP32,full-input-update,coverage-fixture,problem-a,empirical,4,7,8,8,8,2,1,0,0
+cuda,FP32,full-input-update,coverage-fixture,problem-b,empirical,4,7,8,8,8,2,1,0,0
+baseline,beagle_resource,precision,benchmark_mode,study,dataset,topology,leaves,nodes,sites,unique_patterns,site_batch,threads,sequential_ms,beagle_total_ms,max_abs_error,max_relative_error
+beagle,cpu,FP32,full-input-update,coverage-fixture,problem-a,empirical,4,7,8,8,8,1,2,1.5,0,0
+EOF
+head -n 3 "${coverage_report}" > "${work_directory}/no-baseline-report.txt"
+if python3 "${root}/scripts/summarize_benchmarks.py" \
+     "${work_directory}/no-baseline-report.txt" --corpus cuda \
+     --required-baseline beagle-cpu --precision FP32 \
+     --benchmark-mode full-input-update --max-abs-error 0 \
+     --max-relative-error 0 >/dev/null 2>&1; then
+  echo "corpus summary accepted a completely absent baseline" >&2
+  exit 1
+fi
+if python3 "${root}/scripts/summarize_benchmarks.py" "${coverage_report}" \
+     --corpus cuda --precision FP32 --benchmark-mode full-input-update \
+     --required-baseline beagle-cpu \
+     --max-abs-error 0 --max-relative-error 0 >/dev/null 2>&1; then
+  echo "corpus summary accepted incomplete baseline coverage" >&2
+  exit 1
+fi
+cat >> "${coverage_report}" <<'EOF'
+baseline,beagle_resource,precision,benchmark_mode,study,dataset,topology,leaves,nodes,sites,unique_patterns,site_batch,threads,sequential_ms,beagle_total_ms,max_abs_error,max_relative_error
+beagle,cpu,FP32,full-input-update,coverage-fixture,problem-b,empirical,4,7,8,8,8,1,2,1.5,0,0
+EOF
+python3 "${root}/scripts/summarize_benchmarks.py" "${coverage_report}" \
+  --corpus cuda --precision FP32 --benchmark-mode full-input-update \
+  --required-baseline beagle-cpu \
+  --max-abs-error 0 --max-relative-error 0 > \
+  "${work_directory}/coverage-summary.csv"
+grep -Fq 'cuda/beagle_cpu_1t' "${work_directory}/coverage-summary.csv"
+
 manifest_directory="${work_directory}/generic-corpus"
 mkdir -p "${manifest_directory}"
-cat > "${manifest_directory}/manifest.csv" <<'EOF'
-dataset,taxa,raw_sites,unique_patterns,alignment,pattern_weights,tree
-small,4,100,100,small.fa,small.weights,small.nwk
-large,10,100000,100000,large.fa,large.weights,large.nwk
-EOF
 for name in small.fa small.weights small.nwk large.fa large.weights large.nwk; do
   printf '%s\n' fixture > "${manifest_directory}/${name}"
 done
+fixture_sha256="$(shasum -a 256 "${manifest_directory}/small.fa" | awk '{print $1}')"
+cat > "${manifest_directory}/manifest.csv" <<EOF
+dataset,taxa,raw_sites,unique_patterns,alignment,pattern_weights,tree,normalized_alignment_sha256,pattern_weights_sha256,normalized_tree_sha256
+small,4,100,100,small.fa,small.weights,small.nwk,${fixture_sha256},${fixture_sha256},${fixture_sha256}
+large,10,100000,100000,large.fa,large.weights,large.nwk,${fixture_sha256},${fixture_sha256},${fixture_sha256}
+EOF
 printf '%s\n' 'corpus_name=generic-test' > \
   "${manifest_directory}/corpus_metadata.txt"
 manifest_resume="${manifest_directory}/prior-report.txt"
-cat > "${manifest_resume}" <<'EOF'
-backend,precision,benchmark_mode,dataset,topology,leaves,nodes,sites,unique_patterns,site_batch,max_abs_error,max_relative_error
-metal,FP32,full-input-update,small,empirical,4,7,100,100,100,0,0
-# capacity_limit method=metal precision=FP32 dataset=large benchmark_mode=full-input-update threads=none first_infeasible_site_batch=1024 reason=allocation-failure
+manifest_sha256="$(shasum -a 256 "${manifest_directory}/manifest.csv" | awk '{print $1}')"
+manifest_study="empirical-manifest-${manifest_sha256}-minbrlen-0.000001"
+cat > "${manifest_resume}" <<EOF
+backend,precision,benchmark_mode,study,dataset,topology,leaves,nodes,sites,unique_patterns,site_batch,max_abs_error,max_relative_error
+metal,FP32,full-input-update,${manifest_study},small,empirical,4,7,100,100,100,0,0
+# capacity_limit method=metal precision=FP32 dataset=large study=${manifest_study} benchmark_mode=full-input-update threads=none first_infeasible_site_batch=1024 reason=allocation-failure
 EOF
 TREE_HMM_DRY_RUN=1 TREE_HMM_HOST_MEMORY_GUARD_KIB=262144 \
 TREE_HMM_EMPIRICAL_SITE_BATCHES='256 1024 4096' \
@@ -128,6 +166,20 @@ grep -Fq '# resume_capacity_limit method=metal precision=FP32 dataset=large site
   "${manifest_directory}/dry-run.txt"
 ! grep -Fq 'dataset=large taxa=10 raw_sites=100000 unique_patterns=100000 site_batch=4096' \
   "${manifest_directory}/dry-run.txt"
+if TREE_HMM_DRY_RUN=1 TREE_HMM_HOST_MEMORY_GUARD_KIB=262144 \
+   TREE_HMM_EMPIRICAL_SITE_BATCHES='1024 256' \
+   bash "${root}/scripts/benchmark_empirical_manifest.sh" metal \
+     "${manifest_directory}/manifest.csv" >/dev/null 2>&1; then
+  echo "empirical driver accepted a descending site-batch grid" >&2
+  exit 1
+fi
+printf '%s\n' changed > "${manifest_directory}/small.fa"
+if python3 "${root}/scripts/empirical_manifest_rows.py" \
+     "${manifest_directory}/manifest.csv" >/dev/null 2>&1; then
+  echo "empirical manifest accepted modified prepared data" >&2
+  exit 1
+fi
+printf '%s\n' fixture > "${manifest_directory}/small.fa"
 cat >> "${new_report}" <<'EOF'
 backend,precision,benchmark_mode,study,dataset,topology,sequence_generation,evolutionary_root_to_tip_distance,seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,site_batch
 cuda,FP32,full-input-update,clock-like-jc69-simulation,synthetic-jc69,yule,jc69,0.001,20260814,910,2,128,255,1024,813,813
@@ -282,18 +334,32 @@ benchmark_run_capacity_bounded "${work_directory}" 262144 cuda FP32 4 \
 grep -Fq "first_infeasible_site_batch=4" "${killed_output}"
 [[ "${benchmark_capacity_exhausted}" == 1 ]]
 
-guard_output="$(benchmark_run_capacity_bounded "${work_directory}" 262144 \
-  beagle-cpu FP32 8 bash -c 'ulimit -v')"
-[[ "${guard_output}" == 262144 ]]
+if [[ "$(uname -s)" == Linux ]]; then
+  guard_output="$(benchmark_run_capacity_bounded "${work_directory}" 262144 \
+    beagle-cpu FP32 8 bash -c 'ulimit -v')"
+  [[ "${guard_output}" == 262144 ]]
+fi
 
 benchmark_capacity_exhausted=0
 segfault_output="${work_directory}/segfault.txt"
-benchmark_run_capacity_bounded "${work_directory}" 262144 \
-  beagle-cpu FP32 16 bash -c 'kill -s SEGV $$' \
-  > "${segfault_output}" 2>&1
-grep -Fq "first_infeasible_site_batch=16" "${segfault_output}"
-grep -Fq "reason=beagle-segfault-under-memory-limit" "${segfault_output}"
-[[ "${benchmark_capacity_exhausted}" == 1 ]]
+if [[ "$(uname -s)" == Linux ]]; then
+  benchmark_run_capacity_bounded "${work_directory}" 262144 \
+    beagle-cpu FP32 16 bash -c 'kill -s SEGV $$' \
+    > "${segfault_output}" 2>&1
+  grep -Fq "first_infeasible_site_batch=16" "${segfault_output}"
+  grep -Fq "reason=beagle-segfault-under-memory-limit" "${segfault_output}"
+  [[ "${benchmark_capacity_exhausted}" == 1 ]]
+else
+  if benchmark_run_capacity_bounded "${work_directory}" 262144 \
+    beagle-cpu FP32 16 bash -c 'kill -s SEGV $$' \
+    > "${segfault_output}" 2>&1; then
+    echo "an unbounded BEAGLE segfault was misclassified as capacity" >&2
+    exit 1
+  else
+    status=$?
+    [[ "${status}" == 139 ]]
+  fi
+fi
 
 if benchmark_run_capacity_bounded "${work_directory}" 262144 cuda FP32 32 \
   bash -c 'kill -s SEGV $$' >/dev/null 2>&1; then
@@ -341,7 +407,7 @@ cat > "${source_root}/parallel_phylogenetic_inference/scripts/notebook_rocm.sh" 
 printf 'rocm stub precision=%s\n' "${TREE_HMM_PRECISIONS}"
 EOF
 cache_identity="$({
-  echo 'parallel-phylogenetics-benchmark-schema=5'
+  echo 'parallel-phylogenetics-benchmark-schema=7'
   echo 'benchmark-profile=curated'
   echo 'accelerator-backend=cuda'
   echo 'hardware=test-hardware'
@@ -355,10 +421,32 @@ cache_identity="$({
   echo 'fish-modes=full-input-update'
   echo 'pandit-modes=full-input-update'
   echo 'task-modes=full-input-update'
+  echo 'jc69-modes=full-input-update'
+  echo 'jc69-profile=paper'
+  echo 'jc69-topologies-override=unset'
+  echo 'jc69-leaves-override=unset'
+  echo 'jc69-raw-sites-override=unset'
+  echo 'jc69-heights-override=unset'
+  echo 'jc69-replicates-override=unset'
+  echo 'jc69-seed=20260814'
+  echo 'jc69-minimum-repeats-override=unset'
+  echo 'jc69-maximum-repeats-override=unset'
+  echo 'jc69-work-budget-override=unset'
+  echo 'jc69-minimum-site-batch=128'
   echo 'pandit-limit=25'
   echo 'repeats=15'
   echo 'empirical-repeats=3'
+  echo 'empirical-minimum-branch-length=0.000001'
   echo 'conditioning-ms=0'
+  echo 'beagle-version-label=4.1.0-pre-release-d1e9c62'
+  echo 'beagle-source-revision=d1e9c62f922cf544fda4555aedf113519367c07a'
+  echo 'beagle-source-url=https://github.com/beagle-dev/beagle-lib/archive/d1e9c62f922cf544fda4555aedf113519367c07a.tar.gz'
+  echo 'beagle-source-sha256=55da832b6cde0e65872926b312fcc9f2b03c719b2ebdaabc309e2581c5725705'
+  echo 'beagle-build-jobs=1'
+  echo 'beagle-cmake-build-opencl=OFF'
+  echo 'beagle-cmake-build-jni=OFF'
+  echo 'beagle-cmake-build-openmp=OFF'
+  echo 'beagle-cmake-build-bit=OFF'
   echo 'beagle-cpu-threads=1 1'
   echo 'fish-minimum-site-batch=256'
   echo 'host-memory-guard-percent=75'
@@ -371,6 +459,7 @@ cache_identity="$({
   echo 'distribution-seed=20260813'
   echo 'distribution-timing-repeats=5'
   echo 'sanitizer-tools=memcheck racecheck synccheck'
+  echo 'skip-sanitizer=0'
   sort "${source_root}/SOURCE_REVISIONS.txt"
 } | shasum -a 256 | awk '{ print $1 }')"
 printf '# cache_identity sha256=%s\nprevious-row\n' "${cache_identity}" > \
@@ -382,6 +471,7 @@ TREE_HMM_BENCHMARK_SECTIONS="fish pandit" \
 TREE_HMM_HARDWARE_IDENTITY_OVERRIDE=test-hardware \
 TREE_HMM_RESUME_SCOPE=hardware-class \
 TREE_HMM_BEAGLE_CPU_THREADS='1 1' \
+BEAGLE_BUILD_JOBS=1 \
   bash "${root}/scripts/kaggle_cuda_notebook.sh" "${source_root}" \
   > "${launcher_root}/unpacked.log"
 grep -Fq 'using unpacked source input' "${launcher_root}/unpacked.log"

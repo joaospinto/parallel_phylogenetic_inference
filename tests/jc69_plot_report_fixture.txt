@@ -1,0 +1,20 @@
+# study=clock-like-jc69-simulation
+# topology_distributions=yule
+# leaf_counts=32
+# raw_sequence_lengths=8
+# evolutionary_root_to_tip_distances=0.001
+# topology_and_alignment_replicates=1
+# deterministic_seed_base=1
+# profile=fixture
+# cases_per_method_and_precision=1
+# replicate_blocking=fixture
+# timing_repeat_rule=fixture
+# minimum_timing_repeats=3
+# maximum_timing_repeats=3
+# timing_work_budget_node_sites=0
+# conditioning_ms=0
+backend,precision,benchmark_mode,study,dataset,topology,sequence_generation,evolutionary_root_to_tip_distance,seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,site_batch,tree_height,normalized_colless,structural_rounds,primitive_levels,primitive_operations,repeats,conditioning_ms,measured_total_ms,max_abs_error,max_relative_error
+cuda,FP32,full-input-update,clock-like-jc69-simulation,synthetic-jc69,yule,jc69,0.001,1,2,0,32,63,8,8,8,7,0.1,5,16,110,3,0,1,1e-6,1e-7
+metal,FP32,full-input-update,clock-like-jc69-simulation,synthetic-jc69,yule,jc69,0.001,1,2,0,32,63,8,8,8,7,0.1,5,16,110,3,0,9,999,999
+baseline,beagle_resource,precision,benchmark_mode,study,dataset,topology,sequence_generation,evolutionary_root_to_tip_distance,seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,site_batch,tree_height,normalized_colless,structural_rounds,primitive_levels,primitive_operations,repeats,conditioning_ms,threads,measured_total_ms,max_abs_error,max_relative_error
+beagle,cpu,FP32,full-input-update,clock-like-jc69-simulation,synthetic-jc69,yule,jc69,0.001,1,2,0,32,63,8,8,8,7,0.1,5,16,110,3,0,1,1.5,1e-6,1e-7

@@ -20,6 +20,7 @@ precision_label="$(tr '[:lower:]' '[:upper:]' <<< "${precision}")"
 repeats="${TREE_HMM_EMPIRICAL_REPEATS:-3}"
 threads="${BEAGLE_THREADS:-1}"
 benchmark_mode="${TREE_HMM_BENCHMARK_MODE:-full-input-update}"
+conditioning_ms="${TREE_HMM_BENCHMARK_CONDITIONING_MS:-0}"
 minimum_branch_length="${TREE_HMM_EMPIRICAL_MINIMUM_BRANCH_LENGTH:-0.000001}"
 resume_report="${TREE_HMM_RESUME_REPORT:-}"
 metadata="${root}/corpus_metadata.txt"
@@ -33,6 +34,18 @@ for value in "${repeats}" "${threads}" "${requested_site_batches[@]}"; do
     echo "repeat, thread, and site-batch counts must be positive integers" >&2
     exit 2
   }
+done
+[[ "${conditioning_ms}" =~ ^[0-9]+$ ]] || {
+  echo "TREE_HMM_BENCHMARK_CONDITIONING_MS must be nonnegative" >&2
+  exit 2
+}
+previous_site_batch=0
+for value in "${requested_site_batches[@]}"; do
+  if [[ "${value}" -le "${previous_site_batch}" ]]; then
+    echo "TREE_HMM_EMPIRICAL_SITE_BATCHES must be strictly increasing" >&2
+    exit 2
+  fi
+  previous_site_batch="${value}"
 done
 [[ "${dry_run}" == 0 || "${dry_run}" == 1 ]] || {
   echo "TREE_HMM_DRY_RUN must be 0 or 1" >&2
@@ -77,8 +90,11 @@ case "${method}" in
   *) echo "unsupported method ${method}" >&2; exit 2 ;;
 esac
 
+manifest_sha256="$(shasum -a 256 "${manifest}" | awk '{print $1}')"
+study_label="empirical-manifest-${manifest_sha256}-minbrlen-${minimum_branch_length}"
 echo "# empirical_manifest=$(basename "${manifest}")"
-echo "# empirical_manifest_sha256=$(shasum -a 256 "${manifest}" | awk '{print $1}')"
+echo "# empirical_manifest_sha256=${manifest_sha256}"
+echo "# study=${study_label}"
 if [[ -f "${metadata}" ]]; then
   while IFS= read -r line; do
     [[ -n "${line}" ]] && echo "# ${line}"
@@ -88,6 +104,7 @@ else
 fi
 echo "# pattern_compression=exact duplicate columns, prepared before benchmarking"
 echo "# benchmark_mode=${benchmark_mode}"
+echo "# conditioning_ms=${conditioning_ms}"
 echo "# minimum_branch_length=${minimum_branch_length}"
 echo "# branch_length_policy=max(source length, minimum_branch_length)"
 echo "# requested_site_batches=${requested_site_batches[*]}"
@@ -130,6 +147,7 @@ while IFS=$'\t' read -r dataset taxa raw_sites unique_patterns alignment \
   pattern_weights tree; do
   benchmark_capacity_exhausted=0
   benchmark_capacity_dataset="${dataset}"
+  benchmark_capacity_study="${study_label}"
   benchmark_capacity_mode="${benchmark_mode}"
   benchmark_capacity_threads="${resume_threads:-none}"
   while IFS= read -r site_batch; do
@@ -139,7 +157,7 @@ while IFS=$'\t' read -r dataset taxa raw_sites unique_patterns alignment \
       "site_batch=${site_batch}"
     if benchmark_resume_capacity_reached "${resume_report}" "${method}" \
       "${precision_label}" "${site_batch}" "${dataset}" \
-      "${benchmark_mode}" "${resume_threads:-none}"; then
+      "${benchmark_mode}" "${resume_threads:-none}" "${study_label}"; then
       echo "# resume_capacity_limit method=${method}" \
         "precision=${precision_label} dataset=${dataset}" \
         "site_batch=${site_batch}"
@@ -147,7 +165,7 @@ while IFS=$'\t' read -r dataset taxa raw_sites unique_patterns alignment \
     fi
     if benchmark_resume_dataset_batch_completed "${resume_report}" \
       "${method}" "${precision_label}" "${dataset}" "${site_batch}" \
-      "${benchmark_mode}" "${resume_threads}"; then
+      "${benchmark_mode}" "${resume_threads}" "${study_label}"; then
       echo "# resume_skip method=${method} precision=${precision_label}" \
         "dataset=${dataset} site_batch=${site_batch}"
       continue
@@ -165,7 +183,9 @@ while IFS=$'\t' read -r dataset taxa raw_sites unique_patterns alignment \
       --pattern-weights "${root}/${pattern_weights}" \
       --dataset-label "${dataset}" --site-batch "${site_batch}" \
       --minimum-branch-length "${minimum_branch_length}" \
-      --repeats "${repeats}" --benchmark-mode "${benchmark_mode}"
+      --conditioning-ms "${conditioning_ms}" \
+      --repeats "${repeats}" --benchmark-mode "${benchmark_mode}" \
+      --study-label "${study_label}"
     if [[ "${benchmark_capacity_exhausted}" == 1 ]]; then
       break
     fi

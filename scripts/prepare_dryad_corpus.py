@@ -168,7 +168,7 @@ def main() -> None:
                     "source_parquet_sha256": sha256(parquet),
                     "normalized_alignment_sha256": sha256(output_alignment),
                     "pattern_weights_sha256": sha256(output_weights),
-                    "tree_sha256": sha256(output_tree),
+                    "normalized_tree_sha256": sha256(output_tree),
                     "selected_log_likelihood": likelihood,
                     "source_relative_directory": str(relative),
                     "source_doi": DOI,
@@ -184,7 +184,7 @@ def main() -> None:
         "dataset", "taxa", "raw_sites", "unique_patterns", "alignment",
         "pattern_weights", "tree", "source_alignment_sha256",
         "source_parquet_sha256", "normalized_alignment_sha256",
-        "pattern_weights_sha256", "tree_sha256", "selected_log_likelihood",
+        "pattern_weights_sha256", "normalized_tree_sha256", "selected_log_likelihood",
         "source_relative_directory", "source_doi", "source_file_id",
         "source_archive_sha256", "selection_rule",
     ]

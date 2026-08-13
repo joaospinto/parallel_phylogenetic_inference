@@ -79,13 +79,15 @@ case "${benchmark_profile}" in
     default_sections="validation synthetic fish pandit"
     default_modes="full-input-update"
     default_synthetic_modes="full-input-update factor-update fixed-model"
+    default_jc69_modes="full-input-update"
     default_task_modes="full-input-update"
     default_pandit_limit=25
     ;;
   complete)
-    default_sections="validation synthetic distributions tasks fish pandit"
+    default_sections="validation synthetic distributions jc69 tasks fish pandit"
     default_modes="full-input-update factor-update fixed-model"
     default_synthetic_modes="${default_modes}"
+    default_jc69_modes="full-input-update"
     default_task_modes="${default_modes}"
     default_pandit_limit=0
     ;;
@@ -96,6 +98,8 @@ case "${benchmark_profile}" in
 esac
 repeats="${TREE_HMM_BENCHMARK_REPEATS:-5}"
 empirical_repeats="${TREE_HMM_EMPIRICAL_REPEATS:-3}"
+conditioning_ms="${TREE_HMM_BENCHMARK_CONDITIONING_MS:-0}"
+empirical_minimum_branch_length="${TREE_HMM_EMPIRICAL_MINIMUM_BRANCH_LENGTH:-0.000001}"
 read -r -a precisions <<< "${TREE_HMM_PRECISIONS:-FP64 FP32}"
 read -r -a benchmark_modes <<< \
   "${TREE_HMM_BENCHMARK_MODES:-${default_modes}}"
@@ -107,6 +111,8 @@ read -r -a pandit_benchmark_modes <<< \
   "${TREE_HMM_PANDIT_BENCHMARK_MODES:-${default_modes}}"
 read -r -a task_benchmark_modes <<< \
   "${TREE_HMM_TASK_BENCHMARK_MODES:-${default_task_modes}}"
+read -r -a jc69_benchmark_modes <<< \
+  "${TREE_HMM_JC69_BENCHMARK_MODES:-${default_jc69_modes}}"
 pandit_limit="${PANDIT_LIMIT:-${default_pandit_limit}}"
 logical_core_count="$(nproc)"
 read -r -a beagle_cpu_thread_counts <<< \
@@ -128,6 +134,15 @@ if [[ ! "${empirical_repeats}" =~ ^[1-9][0-9]*$ ]]; then
   echo "TREE_HMM_EMPIRICAL_REPEATS must be a positive integer" >&2
   exit 2
 fi
+if [[ ! "${conditioning_ms}" =~ ^[0-9]+$ ]]; then
+  echo "TREE_HMM_BENCHMARK_CONDITIONING_MS must be a nonnegative integer" >&2
+  exit 2
+fi
+awk -v value="${empirical_minimum_branch_length}" \
+  'BEGIN { exit !(value + 0 >= 0) }' || {
+  echo "TREE_HMM_EMPIRICAL_MINIMUM_BRANCH_LENGTH must be nonnegative" >&2
+  exit 2
+}
 if [[ "${#precisions[@]}" -eq 0 ]]; then
   echo "TREE_HMM_PRECISIONS must select FP64, FP32, or both" >&2
   exit 2
@@ -140,7 +155,7 @@ for precision in "${precisions[@]}"; do
 done
 for mode in "${benchmark_modes[@]}" "${synthetic_benchmark_modes[@]}" \
   "${fish_benchmark_modes[@]}" "${pandit_benchmark_modes[@]}" \
-  "${task_benchmark_modes[@]}"; do
+  "${task_benchmark_modes[@]}" "${jc69_benchmark_modes[@]}"; do
   case "${mode}" in
     full-input-update|factor-update|fixed-model) ;;
     *)
@@ -161,7 +176,7 @@ if [[ "${#benchmark_sections[@]}" -eq 0 ]]; then
 fi
 for section in "${benchmark_sections[@]}"; do
   case "${section}" in
-    validation|synthetic|distributions|tasks|fish|pandit) ;;
+    validation|synthetic|distributions|jc69|tasks|fish|pandit) ;;
     *)
       echo "TREE_HMM_BENCHMARK_SECTIONS contains unsupported section ${section}" >&2
       exit 2
@@ -302,6 +317,7 @@ echo "benchmark profile: ${benchmark_profile}"
 echo "PANDIT family limit: ${pandit_limit}"
 echo "fish benchmark modes: ${fish_benchmark_modes[*]}"
 echo "PANDIT benchmark modes: ${pandit_benchmark_modes[*]}"
+echo "JC69 benchmark modes: ${jc69_benchmark_modes[*]}"
 echo "host logical cores: ${logical_core_count}"
 echo "BEAGLE CPU thread counts: ${beagle_cpu_thread_counts[*]}"
 echo "host-memory guard for CPU capacity probes:" \
@@ -323,6 +339,7 @@ if benchmark_section_enabled fish &&
     exit 2
   fi
   fish_site_batches=()
+  fish_study="fish-tree-of-life-minbrlen-${empirical_minimum_branch_length}"
   site_batch="${fish_minimum_site_batch}"
   while [[ "${site_batch}" -lt "${fish_sites}" ]]; do
     fish_site_batches+=("${site_batch}")
@@ -334,12 +351,13 @@ if benchmark_section_enabled pandit &&
    [[ "${TREE_HMM_SKIP_PANDIT:-0}" != "1" ]]; then
   pandit_dir="${notebook_work_dir}/pandit"
   bash "${repo_dir}/scripts/fetch_pandit.sh" "${pandit_dir}" \
-    --min-leaves 100
+    --min-leaves "${PANDIT_MIN_LEAVES:-100}"
 fi
 
 if [[ "${TREE_HMM_SKIP_BENCHMARKS:-0}" != "1" &&
       "${TREE_HMM_SKIP_BEAGLE:-0}" != "1" ]] &&
    { section_selected synthetic || section_selected distributions ||
+     section_selected jc69 ||
      section_selected fish ||
      section_selected pandit; }; then
   beagle_build_backend=cpu
@@ -449,6 +467,7 @@ for precision in "${precisions[@]}"; do
           --topology "${topology}" \
           --leaves "${leaves}" \
           --sites "${sites}" \
+          --conditioning-ms "${conditioning_ms}" \
           --repeats "${repeats}" \
           --benchmark-mode "${benchmark_mode}"
         done
@@ -491,6 +510,7 @@ for precision in "${precisions[@]}"; do
               --topology "${topology}" \
               --leaves "${leaves}" \
               --sites "${sites}" \
+              --conditioning-ms "${conditioning_ms}" \
               --repeats "${repeats}" \
               --benchmark-mode "${benchmark_mode}"
               done
@@ -530,15 +550,80 @@ for precision in "${precisions[@]}"; do
     done
   fi
 
+  if benchmark_section_enabled jc69; then
+    echo "=== ${precision} prespecified clock-like JC69 study ==="
+    if [[ "${TREE_HMM_SKIP_BEAGLE:-0}" != "1" ]]; then
+      "${bazel_command}" build "${precision_args[@]}" //:beagle_benchmark
+    fi
+    for benchmark_mode in "${jc69_benchmark_modes[@]}"; do
+      PRECISION="${precision_config}" \
+        TREE_HMM_JC69_PROFILE="${TREE_HMM_JC69_PROFILE:-paper}" \
+        TREE_HMM_BENCHMARK_MODE="${benchmark_mode}" \
+        TREE_HMM_BENCHMARK_CONDITIONING_MS="${conditioning_ms}" \
+        TREE_HMM_CAPACITY_WORK_DIR="${notebook_work_dir}" \
+        TREE_HMM_RESUME_REPORT="${resume_report}" \
+        bash "${repo_dir}/scripts/benchmark_jc69_simulations.sh" \
+          "${accelerator_backend}"
+      if [[ "${TREE_HMM_SKIP_BEAGLE:-0}" != "1" ]]; then
+        for resource in "${beagle_resources[@]}"; do
+          if [[ "${resource}" == cpu ]]; then
+            resource_threads=("${beagle_cpu_thread_counts[@]}")
+          else
+            resource_threads=(1)
+          fi
+          for threads in "${resource_threads[@]}"; do
+            PRECISION="${precision_config}" \
+              TREE_HMM_JC69_PROFILE="${TREE_HMM_JC69_PROFILE:-paper}" \
+              TREE_HMM_BENCHMARK_MODE="${benchmark_mode}" \
+              TREE_HMM_BENCHMARK_CONDITIONING_MS="${conditioning_ms}" \
+              TREE_HMM_CAPACITY_WORK_DIR="${notebook_work_dir}" \
+              TREE_HMM_RESUME_REPORT="${resume_report}" \
+              BEAGLE_THREADS="${threads}" \
+              bash "${repo_dir}/scripts/benchmark_jc69_simulations.sh" \
+                "beagle-${resource}"
+          done
+        done
+      fi
+    done
+  fi
+
   if benchmark_section_enabled tasks; then
     echo "=== ${precision} representative inference-task timings ==="
+    echo "# study=reverse-task-representative"
+    echo "# task_topology=yule"
+    echo "# task_leaves=2048"
+    echo "# task_sites=256"
+    echo "# task_replicates=10"
+    echo "# task_seed_base=20260813"
     tasks_benchmark="${accelerator_backend}_tasks_benchmark"
     "${bazel_command}" build "${precision_args[@]}" \
       "${accelerator_args[@]}" "//:${tasks_benchmark}"
     for benchmark_mode in "${task_benchmark_modes[@]}"; do
-      "bazel-bin/${tasks_benchmark}" --topology yule --leaves 2048 \
-        --sites 256 --seed 20260813 --replicates 10 --repeats "${repeats}" \
-        --benchmark-mode "${benchmark_mode}"
+      for replicate in {0..9}; do
+        if benchmark_resume_task_case_completed "${resume_report}" \
+          "${accelerator_backend}" "${precision}" yule 2048 256 20260813 \
+          "${replicate}" "${benchmark_mode}" reverse-task-representative; then
+          echo "# resume_skip_task method=${accelerator_backend}" \
+            "precision=${precision} benchmark_mode=${benchmark_mode}" \
+            "replicate=${replicate}"
+          continue
+        fi
+        task_output="$(mktemp "${notebook_work_dir}/task-case.XXXXXX")"
+        if "bazel-bin/${tasks_benchmark}" --topology yule --leaves 2048 \
+            --sites 256 --seed 20260813 --replicate-start "${replicate}" \
+            --replicates 1 --repeats "${repeats}" \
+            --conditioning-ms "${conditioning_ms}" \
+            --benchmark-mode "${benchmark_mode}" \
+            --study-label reverse-task-representative >"${task_output}"; then
+          cat "${task_output}"
+          rm -f "${task_output}"
+        else
+          task_status=$?
+          cat "${task_output}" >&2
+          rm -f "${task_output}"
+          exit "${task_status}"
+        fi
+      done
     done
   fi
 
@@ -548,6 +633,7 @@ for precision in "${precisions[@]}"; do
     for benchmark_mode in "${fish_benchmark_modes[@]}"; do
     benchmark_capacity_exhausted=0
     benchmark_capacity_dataset=actinopt_12k_raxml
+    benchmark_capacity_study="${fish_study}"
     benchmark_capacity_mode="${benchmark_mode}"
     benchmark_capacity_threads=none
     echo "# adaptive_site_batch_grid=${fish_site_batches[*]}"
@@ -555,7 +641,7 @@ for precision in "${precisions[@]}"; do
       if benchmark_resume_capacity_reached "${resume_report}" \
         "${accelerator_backend}" \
         "${precision}" "${site_batch}" actinopt_12k_raxml \
-        "${benchmark_mode}" none; then
+        "${benchmark_mode}" none "${fish_study}"; then
         echo "# resume_capacity_limit method=${accelerator_backend}" \
           "precision=${precision}" \
           "site_batch=${site_batch}"
@@ -564,7 +650,7 @@ for precision in "${precisions[@]}"; do
       if benchmark_resume_dataset_batch_completed "${resume_report}" \
         "${accelerator_backend}" \
         "${precision}" actinopt_12k_raxml "${site_batch}" \
-        "${benchmark_mode}"; then
+        "${benchmark_mode}" "" "${fish_study}"; then
         echo "# resume_skip method=${accelerator_backend}" \
           "precision=${precision}" \
           "dataset=actinopt_12k_raxml site_batch=${site_batch}" \
@@ -583,6 +669,9 @@ for precision in "${precisions[@]}"; do
         --newick "${fish_dir}/actinopt_12k_raxml.tre" \
         --phylip "${fish_dir}/final_alignment.phylip" \
         --site-batch "${site_batch}" \
+        --minimum-branch-length "${empirical_minimum_branch_length}" \
+        --conditioning-ms "${conditioning_ms}" \
+        --study-label "${fish_study}" \
         --repeats "${empirical_repeats}" \
         --benchmark-mode "${benchmark_mode}"
       if [[ "${benchmark_capacity_exhausted}" == "1" ]]; then
@@ -601,19 +690,22 @@ for precision in "${precisions[@]}"; do
         for threads in "${resource_threads[@]}"; do
         benchmark_capacity_exhausted=0
         benchmark_capacity_dataset=actinopt_12k_raxml
+        benchmark_capacity_study="${fish_study}"
         benchmark_capacity_mode="${benchmark_mode}"
         benchmark_capacity_threads="${threads}"
         for site_batch in "${fish_site_batches[@]}"; do
           if benchmark_resume_capacity_reached "${resume_report}" \
             "${method}" "${precision}" "${site_batch}" \
-            actinopt_12k_raxml "${benchmark_mode}" "${threads}"; then
+            actinopt_12k_raxml "${benchmark_mode}" "${threads}" \
+            "${fish_study}"; then
             echo "# resume_capacity_limit method=${method}" \
               "precision=${precision} site_batch=${site_batch}"
             break
           fi
           if benchmark_resume_dataset_batch_completed "${resume_report}" \
             "${method}" "${precision}" actinopt_12k_raxml \
-            "${site_batch}" "${benchmark_mode}" "${threads}"; then
+            "${site_batch}" "${benchmark_mode}" "${threads}" \
+            "${fish_study}"; then
             echo "# resume_skip method=${method} precision=${precision}" \
               "dataset=actinopt_12k_raxml site_batch=${site_batch}" \
               "benchmark_mode=${benchmark_mode} threads=${threads}"
@@ -630,6 +722,9 @@ for precision in "${precisions[@]}"; do
             --newick "${fish_dir}/actinopt_12k_raxml.tre" \
             --phylip "${fish_dir}/final_alignment.phylip" \
             --site-batch "${site_batch}" \
+            --minimum-branch-length "${empirical_minimum_branch_length}" \
+            --conditioning-ms "${conditioning_ms}" \
+            --study-label "${fish_study}" \
             --repeats "${empirical_repeats}" \
             --benchmark-mode "${benchmark_mode}"
           if [[ "${benchmark_capacity_exhausted}" == "1" ]]; then

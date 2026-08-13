@@ -14,6 +14,21 @@ from pathlib import Path
 STUDY = "clock-like-jc69-simulation"
 
 
+def prescribed_timing_repeats(
+    leaves: int,
+    raw_sites: int,
+    minimum: int,
+    maximum: int,
+    node_site_budget: int,
+) -> int:
+    node_sites = (2 * leaves - 1) * raw_sites
+    if leaves <= 0 or raw_sites <= 0 or node_sites <= 0:
+        raise ValueError("taxon and raw-site counts must be positive")
+    if node_site_budget == 0:
+        return maximum
+    return max(minimum, min(maximum, node_site_budget // node_sites))
+
+
 def validate_run_identity(paths: list[Path], override: str | None) -> str:
     if override is not None:
         return override
@@ -42,7 +57,10 @@ def validate_run_identity(paths: list[Path], override: str | None) -> str:
 
 def study_design(
     paths: list[Path],
-) -> tuple[set[str], set[int], set[int], set[float], int, str]:
+) -> tuple[
+    set[str], set[int], set[int], set[float], int, str, str,
+    int, int, int, int, int
+]:
     keys = {
         "topology_distributions",
         "leaf_counts",
@@ -50,6 +68,14 @@ def study_design(
         "evolutionary_root_to_tip_distances",
         "topology_and_alignment_replicates",
         "deterministic_seed_base",
+        "profile",
+        "minimum_timing_repeats",
+        "maximum_timing_repeats",
+        "timing_work_budget_node_sites",
+        "cases_per_method_and_precision",
+        "timing_repeat_rule",
+        "conditioning_ms",
+        "replicate_blocking",
     }
     designs: list[dict[str, str]] = []
     for path in paths:
@@ -90,6 +116,12 @@ def study_design(
             },
             int(design["topology_and_alignment_replicates"]),
             design["deterministic_seed_base"],
+            design["profile"],
+            int(design["minimum_timing_repeats"]),
+            int(design["maximum_timing_repeats"]),
+            int(design["timing_work_budget_node_sites"]),
+            int(design["cases_per_method_and_precision"]),
+            int(design["conditioning_ms"]),
         )
     except ValueError as error:
         raise ValueError("invalid JC69 study declaration") from error
@@ -118,6 +150,7 @@ def read_rows(paths: list[Path]) -> list[dict[str, str]]:
                     continue
                 required = {
                     "topology",
+                    "sequence_generation",
                     "evolutionary_root_to_tip_distance",
                     "seed_base",
                     "seed",
@@ -125,10 +158,25 @@ def read_rows(paths: list[Path]) -> list[dict[str, str]]:
                     "leaves",
                     "sites",
                     "unique_patterns",
+                    "structural_rounds",
+                    "primitive_levels",
+                    "primitive_operations",
+                    "repeats",
+                    "conditioning_ms",
+                    "max_abs_error",
+                    "max_relative_error",
                 }
                 if not required.issubset(row):
-                    continue
+                    missing = required - set(row)
+                    raise ValueError(
+                        f"{path}:{line_number}: JC69 row lacks "
+                        f"{', '.join(sorted(missing))}"
+                    )
                 row["source"] = f"{path}:{line_number}"
+                if row["sequence_generation"] != "jc69":
+                    raise ValueError(
+                        f"{row['source']}: JC69 study row is not a JC69 simulation"
+                    )
                 result.append(row)
     return result
 
@@ -177,6 +225,10 @@ def main() -> None:
     parser.add_argument("--distribution-leaves", type=int)
     parser.add_argument("--distribution-raw-sites", type=int)
     parser.add_argument("--output-directory", type=Path, required=True)
+    parser.add_argument(
+        "--validate-only", action="store_true",
+        help="validate and write paired CSV data without rendering figures",
+    )
     arguments = parser.parse_args()
     run_identity = validate_run_identity(arguments.logs, arguments.run_identity)
     (
@@ -186,7 +238,17 @@ def main() -> None:
         expected_heights,
         expected_replicates,
         expected_seed_base,
+        expected_profile,
+        minimum_timing_repeats,
+        maximum_timing_repeats,
+        timing_work_budget,
+        declared_case_count,
+        declared_conditioning_ms,
     ) = study_design(arguments.logs)
+    if minimum_timing_repeats <= 0 or (
+        maximum_timing_repeats < minimum_timing_repeats
+    ) or timing_work_budget < 0:
+        raise ValueError("invalid JC69 timing-repeat declaration")
     max_abs_error = (
         arguments.max_abs_error
         if arguments.max_abs_error is not None
@@ -199,12 +261,15 @@ def main() -> None:
     )
 
     records = []
+    selected_methods = {arguments.native, arguments.baseline}
     for row in read_rows(arguments.logs):
         if row["precision"] != arguments.precision:
             continue
         if row.get("benchmark_mode", "full-input-update") != arguments.benchmark_mode:
             continue
         row_method = method(row)
+        if row_method not in selected_methods:
+            continue
         if row_method == arguments.baseline:
             if int(row.get("threads", "1")) != arguments.beagle_threads:
                 continue
@@ -227,6 +292,19 @@ def main() -> None:
             raise ValueError(f"nonfinite or nonpositive result at {row['source']}")
         if values[1] > max_abs_error or values[2] > max_relative_error:
             raise ValueError(f"correctness threshold exceeded at {row['source']}")
+        expected_timing_repeats = prescribed_timing_repeats(
+            int(row["leaves"]), int(row["sites"]), minimum_timing_repeats,
+            maximum_timing_repeats, timing_work_budget,
+        )
+        if int(row["repeats"]) != expected_timing_repeats:
+            raise ValueError(
+                f"{row['source']}: timing repeats do not match the "
+                f"declared {expected_profile} profile"
+            )
+        if int(row["conditioning_ms"]) != declared_conditioning_ms:
+            raise ValueError(
+                f"{row['source']}: conditioning does not match the declared profile"
+            )
         records.append(row)
 
     key_fields = (
@@ -246,7 +324,6 @@ def main() -> None:
             raise ValueError(f"duplicate {name} record for case {key}")
         indexed[key][name] = row
 
-    selected_methods = {arguments.native, arguments.baseline}
     incomplete = {
         key: selected_methods - set(methods)
         for key, methods in indexed.items()
@@ -267,11 +344,13 @@ def main() -> None:
         baseline = methods[arguments.baseline]
         for field in (
             "nodes",
+            "sequence_generation",
             "unique_patterns",
-            "site_batch",
             "tree_height",
             "normalized_colless",
+            "structural_rounds",
             "primitive_levels",
+            "primitive_operations",
         ):
             if native[field] != baseline[field]:
                 raise ValueError(f"native/BEAGLE {field} mismatch for case {key}")
@@ -291,6 +370,8 @@ def main() -> None:
                 "run_identity": run_identity,
                 "unique_patterns": native_unique,
                 "unique_pattern_fraction": native_unique / raw_sites,
+                "native_site_batch": int(native["site_batch"]),
+                "baseline_site_batch": int(baseline["site_batch"]),
                 "native_ms": elapsed(native),
                 "baseline_ms": elapsed(baseline),
                 "speedup": elapsed(baseline) / elapsed(native),
@@ -322,6 +403,11 @@ def main() -> None:
         * len(expected_heights)
         * expected_replicates
     )
+    if declared_case_count != expected_count:
+        raise ValueError(
+            f"JC69 design declares {declared_case_count} cases but its axes "
+            f"and replicate count imply {expected_count}"
+        )
     if len(paired) != expected_count:
         raise ValueError(
             f"JC69 grid has {len(paired)} pairs; expected {expected_count}"
@@ -331,6 +417,25 @@ def main() -> None:
             0 <= int(str(row["replicate"])) < expected_replicates
         ):
             raise ValueError("JC69 replicate or seed lies outside the declaration")
+    expected_cells = {
+        (topology, leaves, sites, height, replicate)
+        for topology in expected_topologies
+        for leaves in expected_leaves
+        for sites in expected_raw_sites
+        for height in expected_heights
+        for replicate in range(expected_replicates)
+    }
+    observed_cells = {
+        (
+            str(row["topology"]), int(str(row["leaves"])),
+            int(str(row["sites"])),
+            float(str(row["evolutionary_root_to_tip_distance"])),
+            int(str(row["replicate"])),
+        )
+        for row in paired
+    }
+    if observed_cells != expected_cells:
+        raise ValueError("observed JC69 cases do not equal the declared Cartesian grid")
 
     output = arguments.output_directory
     output.mkdir(parents=True, exist_ok=True)
@@ -353,6 +458,9 @@ def main() -> None:
         writer = csv.DictWriter(stream, fieldnames=list(paired[0]))
         writer.writeheader()
         writer.writerows(paired)
+
+    if arguments.validate_only:
+        return
 
     import matplotlib.pyplot as plt
     import numpy as np

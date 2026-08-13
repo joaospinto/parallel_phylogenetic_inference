@@ -20,9 +20,11 @@ minimum_leaves="${PANDIT_MIN_LEAVES:-100}"
 limit="${PANDIT_LIMIT:-0}"
 repeats="${TREE_HMM_EMPIRICAL_REPEATS:-3}"
 conditioning_ms="${TREE_HMM_BENCHMARK_CONDITIONING_MS:-0}"
+minimum_branch_length="${TREE_HMM_EMPIRICAL_MINIMUM_BRANCH_LENGTH:-0.000001}"
 threads="${BEAGLE_THREADS:-1}"
 benchmark_mode="${TREE_HMM_BENCHMARK_MODE:-full-input-update}"
 resume_report="${TREE_HMM_RESUME_REPORT:-}"
+study_label="pandit-17.0-minbrlen-${minimum_branch_length}"
 for value in "${minimum_leaves}" "${repeats}" "${threads}"; do
   if [[ ! "${value}" =~ ^[1-9][0-9]*$ ]]; then
     echo "leaf, repeat, and thread counts must be positive integers" >&2
@@ -35,6 +37,11 @@ for value in "${limit}" "${conditioning_ms}"; do
     exit 2
   fi
 done
+awk -v value="${minimum_branch_length}" \
+  'BEGIN { exit !(value + 0 >= 0) }' || {
+  echo "TREE_HMM_EMPIRICAL_MINIMUM_BRANCH_LENGTH must be nonnegative" >&2
+  exit 2
+}
 if [[ "${precision}" != fp32 && "${precision}" != fp64 ]]; then
   echo "PRECISION must be fp32 or fp64" >&2
   exit 2
@@ -121,6 +128,9 @@ echo "# manifest=${manifest}"
 echo "# minimum_leaves=${minimum_leaves}"
 echo "# family_limit=${limit}"
 echo "# benchmark_mode=${benchmark_mode}"
+echo "# study=${study_label}"
+echo "# minimum_branch_length=${minimum_branch_length}"
+echo "# branch_length_policy=max(source length, minimum_branch_length)"
 selected=0
 precision_label="$(tr '[:lower:]' '[:upper:]' <<< "${precision}")"
 while IFS=, read -r family leaves raw_sites selected_sites; do
@@ -134,7 +144,7 @@ while IFS=, read -r family leaves raw_sites selected_sites; do
   fi
   if benchmark_resume_dataset_completed "${resume_report}" "${backend}" \
     "${precision_label}" "${family}" "${benchmark_mode}" \
-    "${resume_threads}"; then
+    "${resume_threads}" "${study_label}"; then
     echo "# resume_skip method=${backend} precision=${precision_label}" \
       "dataset=${family}"
     selected=$((selected + 1))
@@ -145,7 +155,9 @@ while IFS=, read -r family leaves raw_sites selected_sites; do
     --fasta "${families}/${family}.fasta"
     --repeats "${repeats}"
     --conditioning-ms "${conditioning_ms}"
+    --minimum-branch-length "${minimum_branch_length}"
     --benchmark-mode "${benchmark_mode}"
+    --study-label "${study_label}"
   )
   case "${backend}" in
     beagle-cpu)

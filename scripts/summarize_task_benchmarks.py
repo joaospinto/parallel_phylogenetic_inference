@@ -88,6 +88,37 @@ def validate_run_identity(paths: list[Path], override: str | None) -> str:
     return str(found_by_path[0])
 
 
+def study_design(paths: list[Path], study: str) -> dict[str, str]:
+    keys = {
+        "task_topology", "task_leaves", "task_sites", "task_replicates",
+        "task_seed_base",
+    }
+    designs: list[dict[str, str]] = []
+    for path in paths:
+        values: dict[str, str] = {}
+        active_study: str | None = None
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line.startswith("# ") or "=" not in line:
+                continue
+            key, value = line[2:].split("=", 1)
+            if key == "study":
+                active_study = value
+            elif active_study == study and key in keys:
+                if key in values and values[key] != value:
+                    raise ValueError(f"{path} has conflicting {study} {key}")
+                values[key] = value
+        missing = keys - set(values)
+        if missing:
+            raise ValueError(
+                f"{path} lacks {study} declarations: {sorted(missing)}"
+            )
+        designs.append(values)
+    if any(design != designs[0] for design in designs[1:]):
+        raise ValueError("task logs declare different study designs")
+    return designs[0]
+
+
 def samples(text: str, source: str) -> list[float]:
     try:
         values = [float(value) for value in text.split("|")]
@@ -150,6 +181,7 @@ def main() -> None:
     parser.add_argument("--max-relative-error", type=float)
     arguments = parser.parse_args()
     validate_run_identity(arguments.logs, arguments.run_identity)
+    design = study_design(arguments.logs, arguments.study)
     rows = records(arguments.logs)
     for field, selected in (
         ("backend", arguments.backend),
@@ -199,6 +231,33 @@ def main() -> None:
     if incomplete:
         key, missing = next(iter(incomplete.items()))
         raise ValueError(f"incomplete task set for {key}: {sorted(missing)}")
+    try:
+        expected_replicates = int(design["task_replicates"])
+        expected_leaves = int(design["task_leaves"])
+        expected_sites = int(design["task_sites"])
+    except ValueError as error:
+        raise ValueError("invalid task-study declaration") from error
+    expected_replicate_set = set(range(expected_replicates))
+    grouped_replicates: dict[tuple[str, ...], set[int]] = defaultdict(set)
+    for row in rows:
+        if (
+            row["topology"] != design["task_topology"]
+            or int(row["leaves"]) != expected_leaves
+            or int(row["sites"]) != expected_sites
+            or row["seed_base"] != design["task_seed_base"]
+        ):
+            raise ValueError(f"task row lies outside declared design at {row['source']}")
+        group = (
+            row["backend"], row["precision"], row["benchmark_mode"],
+            row["study"], row["dataset"], row["topology"],
+        )
+        grouped_replicates[group].add(int(row["replicate"]))
+    for group, observed in grouped_replicates.items():
+        if observed != expected_replicate_set:
+            raise ValueError(
+                f"task study has replicate set {sorted(observed)} for {group}; "
+                f"expected {sorted(expected_replicate_set)}"
+            )
 
     groups: dict[tuple[str, str, str, str], list[dict[str, str]]] = defaultdict(list)
     for row in rows:

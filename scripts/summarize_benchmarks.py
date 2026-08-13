@@ -269,7 +269,11 @@ def write_best(rows: list[dict[str, object]]) -> None:
         writer.writerow(row)
 
 
-def write_corpus(rows: list[dict[str, object]], accelerator: str) -> None:
+def write_corpus(
+    rows: list[dict[str, object]],
+    accelerator: str,
+    required_baselines: list[str],
+) -> None:
     by_problem: dict[
         tuple[str, ...], dict[str, dict[str, object]]
     ] = defaultdict(dict)
@@ -300,7 +304,28 @@ def write_corpus(rows: list[dict[str, object]], accelerator: str) -> None:
             if method.startswith("beagle_cpu_") or method == "beagle_cuda"
         }
     )
+    for required in required_baselines:
+        present = (
+            "beagle_cuda" in beagle_methods
+            if required == "beagle-cuda"
+            else any(method.startswith("beagle_cpu_") for method in beagle_methods)
+        )
+        if not present:
+            raise ValueError(f"required {required} baseline has no records")
+    native_keys = {
+        key for key, methods in by_problem.items() if accelerator in methods
+    }
     for beagle_method in beagle_methods:
+        beagle_keys = {
+            key for key, methods in by_problem.items() if beagle_method in methods
+        }
+        if beagle_keys != native_keys:
+            missing = len(native_keys - beagle_keys)
+            extra = len(beagle_keys - native_keys)
+            raise ValueError(
+                f"{beagle_method} coverage differs from {accelerator}: "
+                f"{missing} missing and {extra} unmatched problems"
+            )
         pairs = [
             (methods[accelerator], methods[beagle_method])
             for methods in by_problem.values()
@@ -346,6 +371,15 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("logs", nargs="+", type=Path)
     parser.add_argument("--corpus", choices=("cuda", "metal", "rocm"))
+    parser.add_argument(
+        "--required-baseline",
+        action="append",
+        choices=("beagle-cpu", "beagle-cuda"),
+        help=(
+            "baseline category required to cover every selected problem; "
+            "defaults to BEAGLE CPU and, for CUDA, BEAGLE CUDA"
+        ),
+    )
     parser.add_argument("--dataset-prefix")
     parser.add_argument("--precision", choices=("FP32", "FP64"))
     parser.add_argument(
@@ -446,7 +480,12 @@ def main() -> None:
             )
     rows = best_batches(aggregate(raw_rows))
     if arguments.corpus:
-        write_corpus(rows, arguments.corpus)
+        required_baselines = arguments.required_baseline
+        if required_baselines is None:
+            required_baselines = ["beagle-cpu"]
+            if arguments.corpus == "cuda":
+                required_baselines.append("beagle-cuda")
+        write_corpus(rows, arguments.corpus, required_baselines)
     else:
         write_best(rows)
 

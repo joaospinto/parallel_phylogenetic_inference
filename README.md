@@ -212,11 +212,18 @@ patterns. Here, *evolutionary root-to-tip distance* is measured in expected
 substitutions per site and is distinct from the integer topological height in
 edges that is also reported.
 
-The default `smoke` profile is deliberately modest. The opt-in `complete`
-profile uses 100 replicates of 100, 1,000, and 10,000 taxa; 1,000, 10,000, and
-100,000 raw sites; and evolutionary root-to-tip distances 0.0001, 0.001, 0.01,
-and 0.1. Individual axes and replicate counts can be overridden through the
-script's `TREE_HMM_JC69_*` environment variables.
+The default `smoke` profile is deliberately modest. The prespecified `paper`
+profile is a full factorial design with ten independently seeded replicate
+blocks, four topology distributions, 128, 1,024, and 8,192 taxa, 256, 2,048,
+and 8,192 raw sites, and evolutionary root-to-tip distances 0.0001, 0.001,
+0.01, and 0.1. Within a topology distribution, taxon count, and replicate
+block, the same topology draw is reused across sequence lengths and
+evolutionary distances; each cell receives its own deterministic alignment.
+This gives 1,440 cases per method and precision. Timing repeats are fixed
+before measurement by a method-independent node-site budget: one to five
+repeats, targeting 20 million node-sites. The opt-in `stress` profile extends
+to 10,000 taxa and 100,000 sites for capacity studies. Individual axes,
+replicates, and repeat-budget parameters remain explicit overrides.
 
 ```sh
 PRECISION=fp32 scripts/benchmark_jc69_simulations.sh cuda
@@ -226,8 +233,12 @@ scripts/plot_jc69_simulation_study.py native.log beagle.log \
   --native cuda --baseline beagle-cpu --precision FP32 \
   --output-directory figures
 
-# Explicit, large paper profile:
-TREE_HMM_JC69_PROFILE=complete PRECISION=fp32 \
+# Prespecified paper profile:
+TREE_HMM_JC69_PROFILE=paper PRECISION=fp32 \
+  scripts/benchmark_jc69_simulations.sh cuda
+
+# Explicit capacity/stress profile:
+TREE_HMM_JC69_PROFILE=stress PRECISION=fp32 \
   scripts/benchmark_jc69_simulations.sh cuda
 ```
 
@@ -254,8 +265,8 @@ BEAGLE 4.1 pre-release CPU implementation during full-input or chunked runs:
 those rows deliberately use reusable partial buffers because that version's
 repeated compact-state setter allocates without reusing its prior buffer. Each
 row records the compact and partial tip counts.
-Empirical-corpus runs also replace branch lengths below (10^{-6}) by
-(10^{-6}), the conventional optimization floor used by major
+Empirical-corpus runs also replace branch lengths below `1e-6` by `1e-6`,
+the conventional optimization floor used by major
 maximum-likelihood phylogenetic programs. The configured floor and exact
 number of affected branches are recorded in every result;
 `TREE_HMM_EMPIRICAL_MINIMUM_BRANCH_LENGTH=0` preserves the source lengths.
@@ -270,9 +281,18 @@ the scalar generic CPU call consumes one preallocated dense site at a time,
 whereas an accelerator call evaluates the site batch. For example:
 
 ```sh
-bazel run --config=fp32 //:metal_tasks_benchmark -- \
-  --topology yule --leaves 2048 --sites 64 --repeats 5 \
-  --benchmark-mode full-input-update > task-benchmarks.log
+{
+  echo '# study=reverse-task-representative'
+  echo '# task_topology=yule'
+  echo '# task_leaves=2048'
+  echo '# task_sites=64'
+  echo '# task_replicates=10'
+  echo '# task_seed_base=20260813'
+  bazel run --config=fp32 //:metal_tasks_benchmark -- \
+    --topology yule --leaves 2048 --sites 64 --seed 20260813 \
+    --replicates 10 --repeats 5 --benchmark-mode full-input-update \
+    --study-label reverse-task-representative
+} > task-benchmarks.log
 scripts/summarize_task_benchmarks.py task-benchmarks.log \
   --backend metal --precision FP32 --benchmark-mode full-input-update
 ```
@@ -312,6 +332,11 @@ scripts/summarize_benchmarks.py report.txt \
   --max-abs-error 0.1 --max-relative-error 0.001
 ```
 
+Corpus summaries require complete BEAGLE CPU coverage and, for CUDA reports,
+complete BEAGLE CUDA coverage; an absent or partial baseline is an error rather
+than a silently smaller comparison set. `--required-baseline` can narrow this
+requirement for an explicitly scoped diagnostic summary.
+
 Multiple input logs must carry the same notebook cache identity. For logs
 captured outside that workflow, `--run-identity` is an explicit assertion that
 the hardware and benchmark protocol match; data from different machines are
@@ -330,6 +355,10 @@ capacities; it does not truncate or replicate the data.
 Optional environment flags add the synthetic distribution and reverse-task
 studies, while `TREE_HMM_EMPIRICAL_MANIFEST` runs any prepared public corpus
 through the same capacity-bounded manifest driver.
+The driver verifies the SHA-256 digest of every normalized alignment, tree,
+and pattern-weight file before launching a timing process. Its study and
+capacity identities include both the complete manifest digest and the branch-
+length policy, so changed prepared data cannot silently reuse old results.
 `notebooks/kaggle_accelerator_benchmark.ipynb` detects an NVIDIA or AMD GPU,
 builds both Linux accelerator backends from checksum-pinned SDKs, executes the
 backend matching the detected device, and records the host and device
@@ -382,6 +411,15 @@ any subset without duplicating orchestration, for example
 `TREE_HMM_PRECISIONS_OVERRIDE=FP32`. Existing `TREE_HMM_SKIP_*` controls,
 repeat-count overrides, sanitizer controls, and memory-guard overrides remain
 available.
+
+The `jc69` section runs the prespecified clock-like JC69 study through the same
+resumable workflow for the native accelerator and matching BEAGLE resources.
+It defaults to the `paper` profile and full-input-update mode. The `complete`
+notebook profile includes this section; a focused run can instead set
+`TREE_HMM_BENCHMARK_SECTIONS=jc69`, with `TREE_HMM_JC69_*` overrides included
+in the report cache identity. Each case first attempts the complete compressed
+alignment in an isolated child process and halves its site batch after a
+capacity failure, so a smaller GPU does not restart the notebook.
 
 For a prespecified broad empirical cohort,
 `scripts/prepare_dryad_corpus.py` imports all 222 alignments in the pinned

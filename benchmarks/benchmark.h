@@ -844,7 +844,8 @@ inline void PrintHeader(const char *backend, const std::string &device,
       << "# precision=" << tree_hmm::kPrecisionName << '\n'
       << "# device=" << device << '\n'
       << "# dataset=" << problem.dataset << '\n'
-      << "# topology=" << problem.topology << "-bifurcating-jc69\n"
+      << "# topology=" << problem.topology << '\n'
+      << "# substitution_model=JC69\n"
       << "# benchmark_mode=" << options.benchmark_mode << '\n'
       << "# study=" << options.study << '\n'
       << "# sequence_generation=" << problem.sequence_generation << '\n'
