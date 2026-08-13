@@ -380,7 +380,10 @@ node topology without creating an 8+ GB derived alignment, the default output
 is a deterministic, seed-recorded subset of at most 512 eligible coordinates;
 pass `--maximum-coordinates 0` to retain all eligible coordinates. The exact
 rule, selected-index hash, coverage distribution, input hashes, label
-normalization, and one-to-one taxon check are recorded in the output manifest.
+normalization, source-tree decoding, and one-to-one taxon check are recorded
+in the output manifest. The official tree's descriptive labels contain a few
+non-UTF-8 bytes; preparation decodes them byte-preservingly as ISO-8859-1 and
+retains only the ASCII accession prefix before the first comma.
 Exact duplicate patterns are compressed only after coordinate selection, with
 their multiplicities retained in `pattern_weights.txt`.
 

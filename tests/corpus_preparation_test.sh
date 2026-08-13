@@ -23,10 +23,13 @@ root = Path(sys.argv[1])
 with zipfile.ZipFile(root / "alignment.zip", "w") as archive:
     archive.write(root / "alignment.fasta", "alignment.fasta")
 PY
-cat > "${work}/tree.ntree" <<'EOF'
-[ARB comment containing a misleading ( parenthesis]
-(('A, (metadata)':0.1,B:0.2):0.3,C:0.4);
-EOF
+python3 - "${work}/tree.ntree" <<'PY'
+import pathlib, sys
+pathlib.Path(sys.argv[1]).write_bytes(
+    b"[ARB comment containing a misleading ( parenthesis]\n"
+    b"(('A, metadata\xa0text':0.1,B:0.2):0.3,C:0.4);\n"
+)
+PY
 python3 "${root}/scripts/prepare_streaming_alignment.py" \
   "${work}/alignment.zip" "${work}/tree.ntree" "${work}/prepared"
 grep -Fq '>A' "${work}/prepared/patterns.fasta"
@@ -40,6 +43,7 @@ assert summary["coordinates"] == 6
 assert summary["retained_coordinates"] == 5
 assert summary["eligible_variable_coordinates"] == 2
 assert summary["minimum_observed_taxa"] == 2
+assert summary["source_tree_encoding"].startswith("ISO-8859-1")
 alignment = (pathlib.Path(sys.argv[1]).parent / "patterns.fasta").read_text()
 weights = [int(value) for value in (
     pathlib.Path(sys.argv[1]).parent / "pattern_weights.txt"

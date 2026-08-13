@@ -116,7 +116,12 @@ def first_newick_tree(text: str) -> int:
 
 
 def normalize_arb_tree(path: Path) -> tuple[str, list[str]]:
-    source = path.read_text(encoding="utf-8")
+    # The published LTPlus tree contains a small number of non-UTF-8 bytes in
+    # the descriptive text following leaf accessions (notably 0xa0 and 0xca).
+    # ISO-8859-1 is deliberately byte-preserving.  The normalization below
+    # retains only the ASCII accession preceding the first comma, so none of
+    # that descriptive text enters the benchmark tree or its taxon mapping.
+    source = path.read_text(encoding="iso-8859-1")
     source = source[first_newick_tree(source) :]
     output: list[str] = []
     leaves: list[str] = []
@@ -316,6 +321,7 @@ def main() -> None:
             "ranks, emitted in original coordinate order"
         ),
         "leaf_label_transform": "exact prefix before first comma, stripped; required unique and complete",
+        "source_tree_encoding": "ISO-8859-1 byte-preserving decode; retained accession prefixes are ASCII",
         "nucleotide_transform": "strip alignment whitespace and map U to T; preserve IUPAC ambiguity and gaps",
     }
     (arguments.output / "selection_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -371,7 +377,7 @@ def main() -> None:
         "pattern_weights", "tree", "source_alignment_sha256",
         "source_tree_sha256", "normalized_alignment_sha256",
         "pattern_weights_sha256", "normalized_tree_sha256",
-        "selected_indices_sha256", "selection_rule",
+        "selected_indices_sha256", "selection_rule", "source_tree_encoding",
     )
     manifest_row = {
         "dataset": "ltplus-february-2026",
@@ -388,6 +394,7 @@ def main() -> None:
         "normalized_tree_sha256": summary["normalized_tree_sha256"],
         "selected_indices_sha256": selected_indices_sha256,
         "selection_rule": summary["selection_rule"],
+        "source_tree_encoding": summary["source_tree_encoding"],
     }
     with (arguments.output / "manifest.csv").open(
         "w", newline="", encoding="utf-8"
@@ -409,6 +416,7 @@ def main() -> None:
         "selection_seed": arguments.selection_seed,
         "selected_indices_sha256": selected_indices_sha256,
         "selection_rule": summary["selection_rule"],
+        "source_tree_encoding": summary["source_tree_encoding"],
         "pattern_compression": "exact-duplicate-selected-columns",
         "redistribution": "none; outputs are prepared locally from official endpoints",
     }
