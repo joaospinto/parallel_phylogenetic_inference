@@ -15,6 +15,7 @@ REQUIRED = (
     "backend",
     "precision",
     "benchmark_mode",
+    "study",
     "task",
     "dataset",
     "topology",
@@ -61,6 +62,30 @@ def records(paths: list[Path]) -> list[dict[str, str]]:
     if not result:
         raise ValueError("no inference-task benchmark CSV records found")
     return result
+
+
+def validate_run_identity(paths: list[Path], override: str | None) -> str:
+    if override is not None:
+        return override
+    prefix = "# cache_identity sha256="
+    found_by_path: list[str | None] = []
+    for path in paths:
+        identities = {
+            line.strip()[len(prefix) :]
+            for line in path.read_text().splitlines()
+            if line.strip().startswith(prefix)
+        }
+        if len(identities) > 1:
+            raise ValueError(f"{path} contains multiple cache identities")
+        found_by_path.append(next(iter(identities)) if identities else None)
+    if len(paths) == 1 and found_by_path[0] is None:
+        return str(paths[0].resolve())
+    if any(value is None for value in found_by_path) or len(set(found_by_path)) != 1:
+        raise ValueError(
+            "task logs must carry one common cache identity; use "
+            "--run-identity only after verifying their provenance"
+        )
+    return str(found_by_path[0])
 
 
 def samples(text: str, source: str) -> list[float]:
@@ -119,17 +144,61 @@ def main() -> None:
         "--benchmark-mode",
         choices=("full-input-update", "factor-update", "fixed-model"),
     )
+    parser.add_argument("--study", default="reverse-task-representative")
+    parser.add_argument("--run-identity")
+    parser.add_argument("--max-abs-error", type=float)
+    parser.add_argument("--max-relative-error", type=float)
     arguments = parser.parse_args()
+    validate_run_identity(arguments.logs, arguments.run_identity)
     rows = records(arguments.logs)
     for field, selected in (
         ("backend", arguments.backend),
         ("precision", arguments.precision),
         ("benchmark_mode", arguments.benchmark_mode),
+        ("study", arguments.study),
     ):
         if selected is not None:
             rows = [row for row in rows if row[field] == selected]
     if not rows:
         raise ValueError("no task records satisfy the requested filters")
+
+    maximum_absolute = (
+        arguments.max_abs_error
+        if arguments.max_abs_error is not None
+        else (0.1 if arguments.precision == "FP32" else 1e-8)
+    )
+    maximum_relative = (
+        arguments.max_relative_error
+        if arguments.max_relative_error is not None
+        else (1e-3 if arguments.precision == "FP32" else 1e-10)
+    )
+    expected_tasks = {
+        "likelihood", "joint-map", "posterior-sample", "all-marginals"
+    }
+    cases: dict[tuple[str, ...], set[str]] = defaultdict(set)
+    for row in rows:
+        identity = tuple(
+            row[field]
+            for field in (
+                "backend", "precision", "benchmark_mode", "study", "dataset",
+                "topology", "seed_base", "seed", "replicate", "leaves",
+                "nodes", "sites", "unique_patterns", "site_batch",
+            )
+        )
+        if row["task"] in cases[identity]:
+            raise ValueError(f"duplicate task record for {identity}: {row['task']}")
+        cases[identity].add(row["task"])
+        if int(row["state_mismatches"]) != 0:
+            raise ValueError(f"state mismatch at {row['source']}")
+        if (
+            float(row["max_abs_error"]) > maximum_absolute
+            or float(row["max_relative_error"]) > maximum_relative
+        ):
+            raise ValueError(f"correctness threshold exceeded at {row['source']}")
+    incomplete = {key: expected_tasks - tasks for key, tasks in cases.items() if tasks != expected_tasks}
+    if incomplete:
+        key, missing = next(iter(incomplete.items()))
+        raise ValueError(f"incomplete task set for {key}: {sorted(missing)}")
 
     groups: dict[tuple[str, str, str, str], list[dict[str, str]]] = defaultdict(list)
     for row in rows:

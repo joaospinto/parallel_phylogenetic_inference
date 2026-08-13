@@ -50,6 +50,7 @@ struct Options {
   std::string benchmark_mode = "full-input-update";
   std::string synthetic_sequence_model = "independent-patterns";
   std::optional<double> evolutionary_root_to_tip_distance;
+  double minimum_branch_length = 0.0;
   std::string study = "standard";
   std::optional<std::filesystem::path> newick;
   std::optional<std::filesystem::path> fasta;
@@ -76,6 +77,8 @@ struct Problem {
   TreeShapeStatistics shape;
   std::string sequence_generation = "empirical";
   std::optional<double> evolutionary_root_to_tip_distance;
+  double minimum_branch_length = 0.0;
+  std::size_t floored_branch_count = 0;
 };
 
 inline std::size_t ParseSize(const char *text, const char *description) {
@@ -103,6 +106,15 @@ inline double ParsePositiveDouble(const char *text, const char *description) {
   char *end = nullptr;
   const double value = std::strtod(text, &end);
   if (text == end || *end != '\0' || !(value > 0.0) || !std::isfinite(value))
+    throw std::invalid_argument(std::string("invalid ") + description);
+  return value;
+}
+
+inline double ParseNonnegativeDouble(const char *text,
+                                     const char *description) {
+  char *end = nullptr;
+  const double value = std::strtod(text, &end);
+  if (text == end || *end != '\0' || value < 0.0 || !std::isfinite(value))
     throw std::invalid_argument(std::string("invalid ") + description);
   return value;
 }
@@ -169,6 +181,9 @@ inline Options ParseOptions(int argc, char **argv) {
     } else if (option == "--evolutionary-root-to-tip-distance") {
       options.evolutionary_root_to_tip_distance = ParsePositiveDouble(
           argv[index], "evolutionary root-to-tip distance");
+    } else if (option == "--minimum-branch-length") {
+      options.minimum_branch_length =
+          ParseNonnegativeDouble(argv[index], "minimum branch length");
     } else if (option == "--study-label") {
       options.study = argv[index];
       if (options.study.empty() || options.study.find(',') != std::string::npos ||
@@ -236,7 +251,23 @@ inline Options ParseOptions(int argc, char **argv) {
     throw std::invalid_argument(
         "--evolutionary-root-to-tip-distance applies only to JC69 simulation");
   }
+  if (!has_alignment && options.minimum_branch_length != 0.0) {
+    throw std::invalid_argument(
+        "--minimum-branch-length applies only to empirical trees");
+  }
   return options;
+}
+
+inline std::size_t FloorBranchLengths(std::vector<Scalar> &lengths,
+                                      double minimum) {
+  std::size_t count = 0;
+  for (Scalar &length : lengths) {
+    if (static_cast<double>(length) < minimum) {
+      length = static_cast<Scalar>(minimum);
+      ++count;
+    }
+  }
+  return count;
 }
 
 inline std::vector<std::uint64_t>
@@ -298,6 +329,9 @@ inline Problem MakeProblem(const Options &options, std::size_t replicate = 0) {
   if (options.newick.has_value()) {
     const Clock::time_point planning_begin = Clock::now();
     Phylogeny phylogeny = LoadNewick(*options.newick);
+    const std::size_t floored_branch_count =
+        FloorBranchLengths(phylogeny.branch_lengths,
+                           options.minimum_branch_length);
     const double planning_ms = Milliseconds(planning_begin, Clock::now());
     const SequenceAlignment alignment = options.fasta.has_value()
                                             ? LoadFasta(*options.fasta)
@@ -337,7 +371,9 @@ inline Problem MakeProblem(const Options &options, std::size_t replicate = 0) {
                    planning_ms,
                    {},
                    "empirical",
-                   std::nullopt};
+                   std::nullopt,
+                   options.minimum_branch_length,
+                   floored_branch_count};
     if (options.compress_patterns)
       CompressPatterns(result);
     result.shape = ShapeStatistics(result.plan);
@@ -396,7 +432,9 @@ inline Problem MakeProblem(const Options &options, std::size_t replicate = 0) {
                  planning_ms,
                  {},
                  options.synthetic_sequence_model,
-                 options.evolutionary_root_to_tip_distance};
+                 options.evolutionary_root_to_tip_distance,
+                 0.0,
+                 0};
   if (simulate_jc69 && options.compress_patterns)
     CompressPatterns(result);
   result.shape = ShapeStatistics(result.plan);
@@ -805,6 +843,7 @@ inline void PrintHeader(const char *backend, const std::string &device,
       << "# dataset=" << problem.dataset << '\n'
       << "# topology=" << problem.topology << "-bifurcating-jc69\n"
       << "# benchmark_mode=" << options.benchmark_mode << '\n'
+      << "# study=" << options.study << '\n'
       << "# sequence_generation=" << problem.sequence_generation << '\n'
       << "# topological_height_edges=" << problem.shape.height << '\n';
   if (problem.evolutionary_root_to_tip_distance.has_value()) {
@@ -812,6 +851,8 @@ inline void PrintHeader(const char *backend, const std::string &device,
               << *problem.evolutionary_root_to_tip_distance << '\n';
   }
   std::cout
+      << "# minimum_branch_length=" << problem.minimum_branch_length << '\n'
+      << "# floored_branch_count=" << problem.floored_branch_count << '\n'
       << "# timing_prepared=host wall time inside the preallocated tree-HMM "
          "backend; it includes only the input transfers selected by "
          "benchmark_mode, computation, and result transfer\n"
@@ -846,7 +887,7 @@ inline void PrintHeader(const char *backend, const std::string &device,
          "resident projections time the conventional CPU reference "
          "separately\n"
       << "backend,precision,benchmark_mode,study,dataset,topology,sequence_generation,"
-         "evolutionary_root_to_tip_distance,seed_base,seed,replicate,leaves,nodes,"
+         "evolutionary_root_to_tip_distance,minimum_branch_length,floored_branch_count,seed_base,seed,replicate,leaves,nodes,"
          "sites,unique_patterns,site_batch,cpu_reference_site_batch,binary_tree,tree_height,sackin_index,"
          "colless_index,normalized_colless,structural_rounds,"
          "primitive_levels,primitive_operations,planning_ms,"
@@ -894,7 +935,8 @@ inline void PrintRow(const char *backend, const Options &options,
             << problem.topology << ',' << problem.sequence_generation << ',';
   if (problem.evolutionary_root_to_tip_distance.has_value())
     std::cout << *problem.evolutionary_root_to_tip_distance;
-  std::cout << ',' << problem.base_seed << ','
+  std::cout << ',' << problem.minimum_branch_length << ','
+            << problem.floored_branch_count << ',' << problem.base_seed << ','
             << problem.seed << ','
             << problem.replicate << ',' << problem.leaves << ','
             << problem.plan.num_nodes() << ',' << problem.raw_sites << ','

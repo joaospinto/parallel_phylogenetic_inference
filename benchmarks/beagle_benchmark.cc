@@ -732,6 +732,10 @@ void RunOne(const BeagleOptions &options, std::size_t replicate) {
     const double relative_error = BeagleMaxRelativeError(
         std::span<const Scalar>(sequential_values),
         std::span<const double>(beagle_values));
+    if (!std::isfinite(absolute_error) || !std::isfinite(relative_error)) {
+      throw std::runtime_error(
+          "benchmark produced a nonfinite per-pattern likelihood or error");
+    }
     double sequential_log_likelihood = 0.0;
     double beagle_log_likelihood = 0.0;
     for (std::size_t pattern = 0; pattern < problem.sites; ++pattern) {
@@ -759,6 +763,7 @@ void RunOne(const BeagleOptions &options, std::size_t replicate) {
                  "workspace, and topology setup; benchmark_mode determines "
                  "which numerical inputs are refreshed\n"
               << "# benchmark_mode=" << options.problem.benchmark_mode << '\n'
+              << "# study=" << options.problem.study << '\n'
               << "# sequence_generation=" << problem.sequence_generation
               << '\n'
               << "# topological_height_edges=" << problem.shape.height
@@ -768,6 +773,10 @@ void RunOne(const BeagleOptions &options, std::size_t replicate) {
                 << *problem.evolutionary_root_to_tip_distance << '\n';
     }
     std::cout
+              << "# minimum_branch_length=" << problem.minimum_branch_length
+              << '\n'
+              << "# floored_branch_count=" << problem.floored_branch_count
+              << '\n'
               << "# timing_beagle_total=host wall time for the input updates "
                  "selected by benchmark_mode, pruning, scaling, root "
                  "integration, and per-pattern likelihood retrieval\n"
@@ -797,7 +806,7 @@ void RunOne(const BeagleOptions &options, std::size_t replicate) {
                  "independently memory-bounded workspace; it is not a mode-matched "
                  "resident implementation\n"
               << "baseline,beagle_resource,precision,benchmark_mode,study,dataset,topology,"
-                 "sequence_generation,evolutionary_root_to_tip_distance,"
+                 "sequence_generation,evolutionary_root_to_tip_distance,minimum_branch_length,floored_branch_count,"
                  "seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,"
                  "site_batch,cpu_reference_site_batch,binary_tree,tree_height,"
                  "sackin_index,colless_index,"
@@ -821,7 +830,8 @@ void RunOne(const BeagleOptions &options, std::size_t replicate) {
               << problem.topology << ',' << problem.sequence_generation << ',';
     if (problem.evolutionary_root_to_tip_distance.has_value())
       std::cout << *problem.evolutionary_root_to_tip_distance;
-    std::cout << ',' << problem.base_seed << ','
+    std::cout << ',' << problem.minimum_branch_length << ','
+              << problem.floored_branch_count << ',' << problem.base_seed << ','
               << problem.seed << ',' << problem.replicate << ','
               << problem.leaves << ',' << problem.plan.num_nodes() << ','
               << problem.raw_sites << ',' << problem.sites << ',' << site_batch

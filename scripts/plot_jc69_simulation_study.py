@@ -11,6 +11,90 @@ from collections import defaultdict
 from pathlib import Path
 
 
+STUDY = "clock-like-jc69-simulation"
+
+
+def validate_run_identity(paths: list[Path], override: str | None) -> str:
+    if override is not None:
+        return override
+    prefix = "# cache_identity sha256="
+    identities: list[str | None] = []
+    for path in paths:
+        found = {
+            line.strip()[len(prefix) :]
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip().startswith(prefix)
+        }
+        if len(found) > 1:
+            raise ValueError(f"{path} contains multiple cache identities")
+        identities.append(next(iter(found)) if found else None)
+    if len(paths) == 1 and identities[0] is None:
+        return str(paths[0].resolve())
+    if any(identity is None for identity in identities):
+        raise ValueError(
+            "multiple logs must carry one common cache identity; otherwise "
+            "supply --run-identity after verifying their provenance"
+        )
+    if len(set(identities)) != 1:
+        raise ValueError("benchmark logs have different cache identities")
+    return str(identities[0])
+
+
+def study_design(
+    paths: list[Path],
+) -> tuple[set[str], set[int], set[int], set[float], int, str]:
+    keys = {
+        "topology_distributions",
+        "leaf_counts",
+        "raw_sequence_lengths",
+        "evolutionary_root_to_tip_distances",
+        "topology_and_alignment_replicates",
+        "deterministic_seed_base",
+    }
+    designs: list[dict[str, str]] = []
+    for path in paths:
+        values: dict[str, str] = {}
+        active_study: str | None = None
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line.startswith("# ") or "=" not in line:
+                continue
+            key, value = line[2:].split("=", 1)
+            if key == "study":
+                active_study = value
+                continue
+            if active_study == STUDY and key in keys:
+                if key in values and values[key] != value:
+                    raise ValueError(
+                        f"{path} contains conflicting {STUDY} {key} declarations"
+                    )
+                values[key] = value
+        missing = keys - set(values)
+        if missing:
+            raise ValueError(
+                f"{path} lacks {STUDY} declarations: "
+                f"{', '.join(sorted(missing))}"
+            )
+        designs.append(values)
+    if any(design != designs[0] for design in designs[1:]):
+        raise ValueError("JC69 logs declare different study designs")
+    design = designs[0]
+    try:
+        return (
+            set(design["topology_distributions"].split()),
+            {int(value) for value in design["leaf_counts"].split()},
+            {int(value) for value in design["raw_sequence_lengths"].split()},
+            {
+                float(value)
+                for value in design["evolutionary_root_to_tip_distances"].split()
+            },
+            int(design["topology_and_alignment_replicates"]),
+            design["deterministic_seed_base"],
+        )
+    except ValueError as error:
+        raise ValueError("invalid JC69 study declaration") from error
+
+
 def read_rows(paths: list[Path]) -> list[dict[str, str]]:
     result: list[dict[str, str]] = []
     for path in paths:
@@ -27,7 +111,10 @@ def read_rows(paths: list[Path]) -> list[dict[str, str]]:
                 if header is None or len(fields) != len(header):
                     continue
                 row = dict(zip(header, fields))
-                if row.get("dataset") != "synthetic-jc69":
+                if (
+                    row.get("dataset") != "synthetic-jc69"
+                    or row.get("study") != STUDY
+                ):
                     continue
                 required = {
                     "topology",
@@ -81,10 +168,35 @@ def main() -> None:
         default="full-input-update",
     )
     parser.add_argument("--beagle-threads", type=int, default=1)
+    parser.add_argument(
+        "--run-identity",
+        help="declared common identity for logs without cache markers",
+    )
+    parser.add_argument("--max-abs-error", type=float)
+    parser.add_argument("--max-relative-error", type=float)
     parser.add_argument("--distribution-leaves", type=int)
     parser.add_argument("--distribution-raw-sites", type=int)
     parser.add_argument("--output-directory", type=Path, required=True)
     arguments = parser.parse_args()
+    run_identity = validate_run_identity(arguments.logs, arguments.run_identity)
+    (
+        expected_topologies,
+        expected_leaves,
+        expected_raw_sites,
+        expected_heights,
+        expected_replicates,
+        expected_seed_base,
+    ) = study_design(arguments.logs)
+    max_abs_error = (
+        arguments.max_abs_error
+        if arguments.max_abs_error is not None
+        else (0.1 if arguments.precision == "FP32" else 1e-8)
+    )
+    max_relative_error = (
+        arguments.max_relative_error
+        if arguments.max_relative_error is not None
+        else (1e-3 if arguments.precision == "FP32" else 1e-10)
+    )
 
     records = []
     for row in read_rows(arguments.logs):
@@ -96,6 +208,25 @@ def main() -> None:
         if row_method == arguments.baseline:
             if int(row.get("threads", "1")) != arguments.beagle_threads:
                 continue
+        if (
+            arguments.benchmark_mode != "full-input-update"
+            and row.get("site_batch") != row.get("unique_patterns")
+        ):
+            raise ValueError(
+                f"{row['source']}: chunked resident timing is a projection"
+            )
+        try:
+            values = (
+                elapsed(row),
+                float(row["max_abs_error"]),
+                float(row["max_relative_error"]),
+            )
+        except (KeyError, ValueError) as error:
+            raise ValueError(f"invalid result at {row['source']}") from error
+        if not all(math.isfinite(value) for value in values) or values[0] <= 0:
+            raise ValueError(f"nonfinite or nonpositive result at {row['source']}")
+        if values[1] > max_abs_error or values[2] > max_relative_error:
+            raise ValueError(f"correctness threshold exceeded at {row['source']}")
         records.append(row)
 
     key_fields = (
@@ -109,7 +240,24 @@ def main() -> None:
     )
     indexed: dict[tuple[str, ...], dict[str, dict[str, str]]] = defaultdict(dict)
     for row in records:
-        indexed[tuple(row[field] for field in key_fields)][method(row)] = row
+        key = tuple(row[field] for field in key_fields)
+        name = method(row)
+        if name in indexed[key]:
+            raise ValueError(f"duplicate {name} record for case {key}")
+        indexed[key][name] = row
+
+    selected_methods = {arguments.native, arguments.baseline}
+    incomplete = {
+        key: selected_methods - set(methods)
+        for key, methods in indexed.items()
+        if selected_methods - set(methods)
+    }
+    if incomplete:
+        key, missing = next(iter(incomplete.items()))
+        raise ValueError(
+            f"incomplete native/BEAGLE pair for {key}: "
+            f"missing {', '.join(sorted(missing))}"
+        )
 
     paired: list[dict[str, object]] = []
     for key, methods in indexed.items():
@@ -117,6 +265,16 @@ def main() -> None:
             continue
         native = methods[arguments.native]
         baseline = methods[arguments.baseline]
+        for field in (
+            "nodes",
+            "unique_patterns",
+            "site_batch",
+            "tree_height",
+            "normalized_colless",
+            "primitive_levels",
+        ):
+            if native[field] != baseline[field]:
+                raise ValueError(f"native/BEAGLE {field} mismatch for case {key}")
         native_unique = int(native["unique_patterns"])
         baseline_unique = int(baseline["unique_patterns"])
         if native_unique != baseline_unique:
@@ -130,6 +288,7 @@ def main() -> None:
                 "baseline": arguments.baseline,
                 "benchmark_mode": arguments.benchmark_mode,
                 "beagle_threads": arguments.beagle_threads,
+                "run_identity": run_identity,
                 "unique_patterns": native_unique,
                 "unique_pattern_fraction": native_unique / raw_sites,
                 "native_ms": elapsed(native),
@@ -142,6 +301,36 @@ def main() -> None:
         )
     if not paired:
         raise ValueError("no matched native/BEAGLE JC69 simulation records")
+
+    observed_axes = (
+        {str(row["topology"]) for row in paired},
+        {int(str(row["leaves"])) for row in paired},
+        {int(str(row["sites"])) for row in paired},
+        {float(str(row["evolutionary_root_to_tip_distance"])) for row in paired},
+    )
+    if observed_axes != (
+        expected_topologies,
+        expected_leaves,
+        expected_raw_sites,
+        expected_heights,
+    ):
+        raise ValueError("observed JC69 grid axes do not match the declaration")
+    expected_count = (
+        len(expected_topologies)
+        * len(expected_leaves)
+        * len(expected_raw_sites)
+        * len(expected_heights)
+        * expected_replicates
+    )
+    if len(paired) != expected_count:
+        raise ValueError(
+            f"JC69 grid has {len(paired)} pairs; expected {expected_count}"
+        )
+    for row in paired:
+        if str(row["seed_base"]) != expected_seed_base or not (
+            0 <= int(str(row["replicate"])) < expected_replicates
+        ):
+            raise ValueError("JC69 replicate or seed lies outside the declaration")
 
     output = arguments.output_directory
     output.mkdir(parents=True, exist_ok=True)

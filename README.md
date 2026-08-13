@@ -254,6 +254,11 @@ BEAGLE 4.1 pre-release CPU implementation during full-input or chunked runs:
 those rows deliberately use reusable partial buffers because that version's
 repeated compact-state setter allocates without reusing its prior buffer. Each
 row records the compact and partial tip counts.
+Empirical-corpus runs also replace branch lengths below (10^{-6}) by
+(10^{-6}), the conventional optimization floor used by major
+maximum-likelihood phylogenetic programs. The configured floor and exact
+number of affected branches are recorded in every result;
+`TREE_HMM_EMPIRICAL_MINIMUM_BRANCH_LENGTH=0` preserves the source lengths.
 `cuda_tasks_benchmark`, `rocm_tasks_benchmark`, and
 `metal_tasks_benchmark` separately time likelihoods, all node and edge
 marginals, joint MAP assignments, and posterior samples through the public

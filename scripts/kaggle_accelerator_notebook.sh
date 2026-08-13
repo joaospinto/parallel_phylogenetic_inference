@@ -166,6 +166,7 @@ cache_identity="$(
     echo "pandit-limit=${PANDIT_LIMIT:-${default_pandit_limit}}"
     echo "repeats=${TREE_HMM_BENCHMARK_REPEATS:-15}"
     echo "empirical-repeats=${TREE_HMM_EMPIRICAL_REPEATS:-3}"
+    echo "empirical-minimum-branch-length=${TREE_HMM_EMPIRICAL_MINIMUM_BRANCH_LENGTH:-0.000001}"
     echo "conditioning-ms=${TREE_HMM_BENCHMARK_CONDITIONING_MS:-0}"
     echo "beagle-cpu-threads=${TREE_HMM_BEAGLE_CPU_THREADS:-1 ${logical_core_count}}"
     echo "fish-minimum-site-batch=${TREE_HMM_FISH_MINIMUM_SITE_BATCH:-256}"

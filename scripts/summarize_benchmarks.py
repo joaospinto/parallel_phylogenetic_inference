@@ -18,6 +18,8 @@ IDENTITY = (
     "study",
     "dataset",
     "topology",
+    "minimum_branch_length",
+    "floored_branch_count",
     "leaves",
     "nodes",
     "sites",
@@ -108,6 +110,8 @@ def records(paths: list[Path]) -> list[dict[str, str]]:
                 row = dict(zip(header, fields))
                 row.setdefault("benchmark_mode", "full-input-update")
                 row.setdefault("study", "standard")
+                row.setdefault("minimum_branch_length", "0")
+                row.setdefault("floored_branch_count", "0")
                 if row.get("baseline") == "beagle":
                     row.setdefault("threads", "1")
                 missing = [field for field in IDENTITY if field not in row]

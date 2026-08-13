@@ -119,6 +119,8 @@ TREE_HMM_RESUME_REPORT="${manifest_resume}" \
     "${manifest_directory}/manifest.csv" > \
     "${manifest_directory}/dry-run.txt"
 grep -Fq '# corpus_name=generic-test' "${manifest_directory}/dry-run.txt"
+grep -Fq '# minimum_branch_length=0.000001' \
+  "${manifest_directory}/dry-run.txt"
 grep -Fq '# planned_cases=5' "${manifest_directory}/dry-run.txt"
 grep -Fq '# resume_skip method=metal precision=FP32 dataset=small site_batch=100' \
   "${manifest_directory}/dry-run.txt"

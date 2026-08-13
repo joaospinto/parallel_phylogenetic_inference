@@ -1,5 +1,6 @@
 #include "benchmark.h"
 
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
 #include <vector>
@@ -34,9 +35,16 @@ void RunOne(const parallel_phylogenetics::benchmark::Options &options,
               PARALLEL_PHYLOGENETICS_ACCELERATOR_NAMESPACE::
                   DeviceDescription(),
               options, problem);
+  const double absolute_error =
+      MaxAbsoluteError(result.cpu_values, result.accelerator_values);
+  const double relative_error =
+      MaxRelativeError(result.cpu_values, result.accelerator_values);
+  if (!std::isfinite(absolute_error) || !std::isfinite(relative_error)) {
+    throw std::runtime_error(
+        "benchmark produced a nonfinite per-pattern likelihood or error");
+  }
   PrintRow(PARALLEL_PHYLOGENETICS_BACKEND_NAME, options, problem, result,
-           MaxAbsoluteError(result.cpu_values, result.accelerator_values),
-           MaxRelativeError(result.cpu_values, result.accelerator_values));
+           absolute_error, relative_error);
 }
 
 } // namespace

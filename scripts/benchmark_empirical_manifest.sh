@@ -20,6 +20,7 @@ precision_label="$(tr '[:lower:]' '[:upper:]' <<< "${precision}")"
 repeats="${TREE_HMM_EMPIRICAL_REPEATS:-3}"
 threads="${BEAGLE_THREADS:-1}"
 benchmark_mode="${TREE_HMM_BENCHMARK_MODE:-full-input-update}"
+minimum_branch_length="${TREE_HMM_EMPIRICAL_MINIMUM_BRANCH_LENGTH:-0.000001}"
 resume_report="${TREE_HMM_RESUME_REPORT:-}"
 metadata="${root}/corpus_metadata.txt"
 read -r -a requested_site_batches <<< \
@@ -35,6 +36,11 @@ for value in "${repeats}" "${threads}" "${requested_site_batches[@]}"; do
 done
 [[ "${dry_run}" == 0 || "${dry_run}" == 1 ]] || {
   echo "TREE_HMM_DRY_RUN must be 0 or 1" >&2
+  exit 2
+}
+awk -v value="${minimum_branch_length}" \
+  'BEGIN { exit !(value + 0 >= 0) }' || {
+  echo "TREE_HMM_EMPIRICAL_MINIMUM_BRANCH_LENGTH must be nonnegative" >&2
   exit 2
 }
 host_memory_guard_kib="${TREE_HMM_HOST_MEMORY_GUARD_KIB:-}"
@@ -82,6 +88,8 @@ else
 fi
 echo "# pattern_compression=exact duplicate columns, prepared before benchmarking"
 echo "# benchmark_mode=${benchmark_mode}"
+echo "# minimum_branch_length=${minimum_branch_length}"
+echo "# branch_length_policy=max(source length, minimum_branch_length)"
 echo "# requested_site_batches=${requested_site_batches[*]}"
 echo "# capacity_policy=ascending site batches in isolated, host-memory-bounded children"
 echo "# host_memory_guard_kib=${host_memory_guard_kib}"
@@ -156,6 +164,7 @@ while IFS=$'\t' read -r dataset taxa raw_sites unique_patterns alignment \
       --newick "${root}/${tree}" --fasta "${root}/${alignment}" \
       --pattern-weights "${root}/${pattern_weights}" \
       --dataset-label "${dataset}" --site-batch "${site_batch}" \
+      --minimum-branch-length "${minimum_branch_length}" \
       --repeats "${repeats}" --benchmark-mode "${benchmark_mode}"
     if [[ "${benchmark_capacity_exhausted}" == 1 ]]; then
       break

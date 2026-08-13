@@ -100,6 +100,13 @@ int main() {
   Check(SyntheticSeed(1, 64, 256, 0, "yule") !=
         SyntheticSeed(1, 64, 256, 1, "yule"));
 
+  std::vector<parallel_phylogenetics::Scalar> floored_lengths = {
+      0.0, 1e-8, 1e-4};
+  Check(FloorBranchLengths(floored_lengths, 1e-6) == 2);
+  Check(std::abs(static_cast<double>(floored_lengths[0]) - 1e-6) <= 1e-12);
+  Check(std::abs(static_cast<double>(floored_lengths[1]) - 1e-6) <= 1e-12);
+  Check(std::abs(static_cast<double>(floored_lengths[2]) - 1e-4) <= 1e-10);
+
   for (const std::string topology :
        {"balanced", "yule", "beta-critical", "uniform", "caterpillar"}) {
     Options options;

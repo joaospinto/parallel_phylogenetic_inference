@@ -140,7 +140,7 @@ void TimeTask(const char *backend, const char *task, InferenceTask operation,
          "factor-update refreshes numerical factors; fixed-model retains "
          "both. The generic CPU prepared call still copies each dense site "
          "into its scalar workspace.\n"
-      << "backend,precision,benchmark_mode,task,dataset,topology,seed_base,"
+      << "backend,precision,benchmark_mode,study,task,dataset,topology,seed_base,"
          "seed,replicate,leaves,nodes,sites,unique_patterns,site_batch,"
          "binary_tree,tree_height,sackin_index,colless_index,"
          "normalized_colless,structural_rounds,primitive_levels,"
@@ -151,7 +151,8 @@ void TimeTask(const char *backend, const char *task, InferenceTask operation,
          "cpu_over_accelerator,max_abs_error,max_relative_error,"
          "state_mismatches,cpu_samples_ms,accelerator_samples_ms\n"
       << std::setprecision(10) << backend << ',' << tree_hmm::kPrecisionName
-      << ',' << options.benchmark_mode << ',' << task << ',' << problem.dataset
+      << ',' << options.benchmark_mode << ',' << options.study << ',' << task
+      << ',' << problem.dataset
       << ',' << problem.topology << ',' << problem.base_seed << ','
       << problem.seed << ',' << problem.replicate << ',' << problem.leaves
       << ',' << problem.plan.num_nodes() << ',' << problem.raw_sites << ','
