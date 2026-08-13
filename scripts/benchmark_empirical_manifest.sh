@@ -176,9 +176,13 @@ while IFS=$'\t' read -r dataset taxa raw_sites unique_patterns alignment \
     if [[ "${dry_run}" == 1 ]]; then
       continue
     fi
+    command=("bazel-bin/${target}")
+    if [[ "${#extra[@]}" -ne 0 ]]; then
+      command+=("${extra[@]}")
+    fi
     benchmark_run_capacity_bounded "${work_directory}" \
       "${host_memory_guard_kib}" "${method}" "${precision_label}" \
-      "${site_batch}" "bazel-bin/${target}" "${extra[@]}" \
+      "${site_batch}" "${command[@]}" \
       --newick "${root}/${tree}" --fasta "${root}/${alignment}" \
       --pattern-weights "${root}/${pattern_weights}" \
       --dataset-label "${dataset}" --site-batch "${site_batch}" \
