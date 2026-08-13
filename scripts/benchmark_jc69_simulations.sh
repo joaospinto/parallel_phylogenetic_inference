@@ -159,6 +159,7 @@ for topology in "${topologies[@]}"; do
           fi
           "${command[@]}" "--topology" "${topology}" \
             --leaves "${leaves}" --sites "${raw_sites}" \
+            --study-label clock-like-jc69-simulation \
             --synthetic-sequence-model jc69 \
             --evolutionary-root-to-tip-distance "${evolutionary_height}" \
             --compress-patterns true --seed "${seed}" \

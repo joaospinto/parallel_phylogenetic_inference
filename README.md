@@ -334,6 +334,11 @@ Its default `curated` profile runs the complete large-data comparisons, a
 `TREE_HMM_BENCHMARK_PROFILE=complete` enables every precision, mode,
 distribution replicate, task, and PANDIT family; individual section and mode
 variables remain available as explicit overrides.
+Reports resume only within the same host/GPU session by default: the cache
+identity includes the host boot and accelerator identity as well as every
+benchmark-grid setting. Setting `TREE_HMM_RESUME_SCOPE=hardware-class`
+explicitly permits reuse across different workers with the same recorded
+hardware class and software protocol.
 Before native execution, the launcher verifies that the host NVIDIA driver is
 new enough for the pinned CUDA toolkit or that the pinned ROCm runtime can
 enumerate the selected AMD device through the host kernel driver. The notebook

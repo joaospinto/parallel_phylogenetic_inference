@@ -611,7 +611,19 @@ void RunOne(const BeagleOptions &options, std::size_t replicate) {
     };
     const auto condition_beagle = [&] {
       static_cast<void>(full_beagle.UpdateFactors(first));
-      static_cast<void>(full_beagle.Evaluate(first, true));
+      if (tail_beagle != nullptr) {
+        static_cast<void>(tail_beagle->UpdateFactors(
+            SiteBatch(model, model.sites - remainder, remainder)));
+      }
+      for (std::size_t first_site = 0; first_site < model.sites;
+           first_site += site_batch) {
+        const std::size_t count =
+            std::min(site_batch, model.sites - first_site);
+        const AlignmentModelView batch = SiteBatch(model, first_site, count);
+        BeagleWorkspace &workspace =
+            count == site_batch ? full_beagle : *tail_beagle;
+        static_cast<void>(workspace.Evaluate(batch, true));
+      }
     };
     ConditionInterleaved(options.problem.conditioning_ms,
                          condition_sequential, condition_beagle);
@@ -784,7 +796,7 @@ void RunOne(const BeagleOptions &options, std::size_t replicate) {
               << "# conventional_cpu_reference=full evaluation with an "
                  "independently memory-bounded workspace; it is not a mode-matched "
                  "resident implementation\n"
-              << "baseline,beagle_resource,precision,benchmark_mode,dataset,topology,"
+              << "baseline,beagle_resource,precision,benchmark_mode,study,dataset,topology,"
                  "sequence_generation,evolutionary_root_to_tip_distance,"
                  "seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,"
                  "site_batch,cpu_reference_site_batch,binary_tree,tree_height,"
@@ -803,7 +815,8 @@ void RunOne(const BeagleOptions &options, std::size_t replicate) {
                  "beagle_pruning_samples_ms,beagle_total_samples_ms\n"
               << std::setprecision(10) << "beagle," << options.resource << ','
               << tree_hmm::kPrecisionName << ','
-              << options.problem.benchmark_mode << ','
+              << options.problem.benchmark_mode << ',' << options.problem.study
+              << ','
               << problem.dataset << ','
               << problem.topology << ',' << problem.sequence_generation << ',';
     if (problem.evolutionary_root_to_tip_distance.has_value())

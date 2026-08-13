@@ -49,11 +49,13 @@ work_directory="$(mktemp -d "${TMPDIR:-/tmp}/benchmark-shell-test.XXXXXX")"
 trap 'rm -rf "${work_directory}"' EXIT
 new_report="${work_directory}/new-report.txt"
 cat > "${new_report}" <<'EOF'
-backend,precision,benchmark_mode,dataset,topology,seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,site_batch
-cuda,FP32,factor-update,synthetic,yule,20260813,91,0,128,255,64,64,64
-cuda,FP32,fixed-model,synthetic,yule,20260813,92,2,128,255,64,64,64
-baseline,beagle_resource,precision,benchmark_mode,dataset,topology,seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,site_batch,threads
-beagle,cuda,FP32,factor-update,synthetic,yule,20260813,91,0,128,255,64,64,64,1
+backend,precision,benchmark_mode,study,dataset,topology,seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,site_batch
+cuda,FP32,factor-update,independent-taxa-pattern-grid,synthetic,yule,20260813,91,0,128,255,64,64,64
+cuda,FP32,fixed-model,independent-taxa-pattern-grid,synthetic,yule,20260813,92,2,128,255,64,64,64
+cuda,FP32,factor-update,standard,synthetic,yule,20260813,91,0,128,255,64,64,64
+cuda,FP32,factor-update,independent-taxa-pattern-grid,synthetic,yule,20260813,93,0,129,257,64,64,64
+baseline,beagle_resource,precision,benchmark_mode,study,dataset,topology,seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,site_batch,threads
+beagle,cuda,FP32,factor-update,independent-taxa-pattern-grid,synthetic,yule,20260813,91,0,128,255,64,64,64,1
 EOF
 benchmark_resume_synthetic_replicate_completed "${new_report}" cuda FP32 \
   yule 128 64 20260813 0 factor-update
@@ -69,6 +71,16 @@ benchmark_resume_synthetic_replicate_completed "${new_report}" beagle-cuda \
   FP32 yule 128 64 20260813 0 fixed-model 1
 ! benchmark_resume_synthetic_replicate_completed "${new_report}" beagle-cuda \
   FP32 yule 128 64 20260813 0 factor-update 2
+benchmark_resume_synthetic_replicate_completed "${new_report}" cuda FP32 \
+  yule 128 64 20260813 0 factor-update "" standard
+benchmark_resume_case_completed "${new_report}" cuda FP32 synthetic yule \
+  129 64 64 factor-update "" independent-taxa-pattern-grid
+if benchmark_resume_case_completed "${new_report}" cuda FP32 synthetic yule \
+  129 64 64 factor-update "" standard; then
+  echo "an independent distribution row satisfied a standard-study resume" >&2
+  exit 1
+fi
+
 mixed_report="${work_directory}/mixed-report.txt"
 cat > "${mixed_report}" <<'EOF'
 backend,precision,task,dataset,topology,seed_base,seed,replicate,leaves,nodes,unique_patterns,tree_height,normalized_colless,primitive_levels,benchmark_mode,planning_ms,workspace_setup_ms,repeats,median_ms,p25_ms,p75_ms,samples_ms
@@ -107,19 +119,18 @@ TREE_HMM_RESUME_REPORT="${manifest_resume}" \
     "${manifest_directory}/manifest.csv" > \
     "${manifest_directory}/dry-run.txt"
 grep -Fq '# corpus_name=generic-test' "${manifest_directory}/dry-run.txt"
-grep -Fq '# planned_cases=4' "${manifest_directory}/dry-run.txt"
+grep -Fq '# planned_cases=5' "${manifest_directory}/dry-run.txt"
 grep -Fq '# resume_skip method=metal precision=FP32 dataset=small site_batch=100' \
   "${manifest_directory}/dry-run.txt"
 grep -Fq '# resume_capacity_limit method=metal precision=FP32 dataset=large site_batch=1024' \
   "${manifest_directory}/dry-run.txt"
 ! grep -Fq 'dataset=large taxa=10 raw_sites=100000 unique_patterns=100000 site_batch=4096' \
   "${manifest_directory}/dry-run.txt"
-
 cat >> "${new_report}" <<'EOF'
-backend,precision,benchmark_mode,dataset,topology,sequence_generation,evolutionary_root_to_tip_distance,seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,site_batch
-cuda,FP32,full-input-update,synthetic-jc69,yule,jc69,0.001,20260814,910,2,128,255,1024,813,813
-baseline,beagle_resource,precision,benchmark_mode,dataset,topology,sequence_generation,evolutionary_root_to_tip_distance,seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,site_batch,threads
-beagle,cpu,FP32,full-input-update,synthetic-jc69,yule,jc69,0.001,20260814,910,2,128,255,1024,813,813,4
+backend,precision,benchmark_mode,study,dataset,topology,sequence_generation,evolutionary_root_to_tip_distance,seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,site_batch
+cuda,FP32,full-input-update,clock-like-jc69-simulation,synthetic-jc69,yule,jc69,0.001,20260814,910,2,128,255,1024,813,813
+baseline,beagle_resource,precision,benchmark_mode,study,dataset,topology,sequence_generation,evolutionary_root_to_tip_distance,seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,site_batch,threads
+beagle,cpu,FP32,full-input-update,clock-like-jc69-simulation,synthetic-jc69,yule,jc69,0.001,20260814,910,2,128,255,1024,813,813,4
 EOF
 benchmark_resume_jc69_replicate_completed "${new_report}" cuda FP32 yule \
   128 1024 0.001 20260814 2
@@ -133,6 +144,56 @@ benchmark_resume_jc69_replicate_completed "${new_report}" beagle-cpu FP32 \
   yule 128 1024 0.001 20260814 2 full-input-update 4
 ! benchmark_resume_jc69_replicate_completed "${new_report}" beagle-cpu FP32 \
   yule 128 1024 0.001 20260814 2 factor-update 4
+
+TREE_HMM_DRY_RUN=1 TREE_HMM_HOST_MEMORY_GUARD_KIB=262144 \
+TREE_HMM_EMPIRICAL_SITE_BATCHES='256 1024 4096' \
+  bash "${root}/scripts/benchmark_empirical_manifest.sh" metal \
+    "${manifest_directory}/manifest.csv" > \
+    "${manifest_directory}/complete-dry-run.txt"
+grep -Fq 'dataset=large taxa=10 raw_sites=100000 unique_patterns=100000 site_batch=100000' \
+  "${manifest_directory}/complete-dry-run.txt"
+
+study_log="${work_directory}/study.log"
+cat > "${study_log}" <<'EOF'
+# topology_distributions=yule
+# leaf_counts=128
+# unique_pattern_counts=64
+# topology_replicates=1
+# deterministic_seed_base=20260813
+backend,precision,benchmark_mode,study,dataset,topology,seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,site_batch,measured_total_ms,max_abs_error,max_relative_error
+cuda,FP32,full-input-update,standard,synthetic,yule,20260813,91,0,128,255,64,64,64,2,0,0
+cuda,FP32,full-input-update,independent-taxa-pattern-grid,synthetic,yule,20260813,91,0,128,255,64,64,64,1,0,0
+EOF
+python3 - "${root}" "${study_log}" <<'PY'
+import importlib.util
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1]) / "scripts/plot_synthetic_study.py"
+spec = importlib.util.spec_from_file_location("plot_synthetic_study", path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+rows = module.rows([pathlib.Path(sys.argv[2])])
+assert len(rows) == 1
+assert rows[0]["study"] == "independent-taxa-pattern-grid"
+module.study_design([pathlib.Path(sys.argv[2])])
+PY
+printf '%s\n' '# leaf_counts=256' >> "${study_log}"
+if python3 - "${root}" "${study_log}" 2>/dev/null <<'PY'
+import importlib.util
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1]) / "scripts/plot_synthetic_study.py"
+spec = importlib.util.spec_from_file_location("plot_synthetic_study", path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.study_design([pathlib.Path(sys.argv[2])])
+PY
+then
+  echo "conflicting synthetic-study declarations were accepted" >&2
+  exit 1
+fi
 mock_rocm="${work_directory}/rocm"
 mkdir -p "${mock_rocm}/bin" "${mock_rocm}/lib"
 printf '%s\n' '#!/usr/bin/env bash' 'echo "  Name: gfx942"' > \
@@ -278,10 +339,12 @@ cat > "${source_root}/parallel_phylogenetic_inference/scripts/notebook_rocm.sh" 
 printf 'rocm stub precision=%s\n' "${TREE_HMM_PRECISIONS}"
 EOF
 cache_identity="$({
-  echo 'parallel-phylogenetics-benchmark-schema=4'
+  echo 'parallel-phylogenetics-benchmark-schema=5'
   echo 'benchmark-profile=curated'
   echo 'accelerator-backend=cuda'
   echo 'hardware=test-hardware'
+  echo 'resume-scope=hardware-class'
+  echo 'session-identity=not-included'
   echo "host-cpu=$(grep -m1 -E 'model name|Hardware' /proc/cpuinfo 2>/dev/null || uname -m)"
   echo 'precisions=FP32'
   echo 'sections=fish pandit'
@@ -295,6 +358,17 @@ cache_identity="$({
   echo 'empirical-repeats=3'
   echo 'conditioning-ms=0'
   echo 'beagle-cpu-threads=1 1'
+  echo 'fish-minimum-site-batch=256'
+  echo 'host-memory-guard-percent=75'
+  echo 'host-memory-guard-kib=automatic'
+  echo 'pandit-minimum-leaves=100'
+  echo 'distribution-topologies=yule beta-critical uniform caterpillar'
+  echo 'distribution-leaves=128 512 2048 8192'
+  echo 'distribution-patterns=16 64 256 1024'
+  echo 'distribution-replicates=30'
+  echo 'distribution-seed=20260813'
+  echo 'distribution-timing-repeats=5'
+  echo 'sanitizer-tools=memcheck racecheck synccheck'
   sort "${source_root}/SOURCE_REVISIONS.txt"
 } | shasum -a 256 | awk '{ print $1 }')"
 printf '# cache_identity sha256=%s\nprevious-row\n' "${cache_identity}" > \
@@ -304,6 +378,7 @@ TREE_HMM_NOTEBOOK_WORKING_DIR="${working_root}" \
 TREE_HMM_PRECISIONS_OVERRIDE=FP32 TREE_HMM_SKIP_FISH_TREE=1 \
 TREE_HMM_BENCHMARK_SECTIONS="fish pandit" \
 TREE_HMM_HARDWARE_IDENTITY_OVERRIDE=test-hardware \
+TREE_HMM_RESUME_SCOPE=hardware-class \
 TREE_HMM_BEAGLE_CPU_THREADS='1 1' \
   bash "${root}/scripts/kaggle_cuda_notebook.sh" "${source_root}" \
   > "${launcher_root}/unpacked.log"
@@ -314,9 +389,26 @@ grep -Fq 'stub precision=FP32 skip_fish=1' \
   "${working_root}/parallel_phylogenetics_cuda_report.txt"
 grep -Fq 'stub sections=fish pandit' \
   "${working_root}/parallel_phylogenetics_cuda_report.txt"
+different_protocol_working="${launcher_root}/different-protocol-working"
+mkdir -p "${different_protocol_working}"
+TREE_HMM_NOTEBOOK_INPUT_DIR="${launcher_root}/input" \
+TREE_HMM_NOTEBOOK_WORKING_DIR="${different_protocol_working}" \
+TREE_HMM_PRECISIONS_OVERRIDE=FP32 TREE_HMM_SKIP_FISH_TREE=1 \
+TREE_HMM_BENCHMARK_SECTIONS="fish pandit" \
+TREE_HMM_HARDWARE_IDENTITY_OVERRIDE=test-hardware \
+TREE_HMM_RESUME_SCOPE=hardware-class \
+TREE_HMM_BEAGLE_CPU_THREADS='1 1' \
+TREE_HMM_DISTRIBUTION_TIMING_REPEATS=6 \
+  bash "${root}/scripts/kaggle_cuda_notebook.sh" "${source_root}" \
+  > "${launcher_root}/different-protocol.log"
+grep -Fq 'no prior report matches the current source identity' \
+  "${launcher_root}/different-protocol.log"
+! grep -Fq 'previous-row' \
+  "${different_protocol_working}/parallel_phylogenetics_cuda_report.txt"
 TREE_HMM_NOTEBOOK_INPUT_DIR="${launcher_root}/input" \
 TREE_HMM_NOTEBOOK_WORKING_DIR="${working_root}" \
 TREE_HMM_ACCELERATOR_BACKEND_OVERRIDE=rocm \
+TREE_HMM_RESUME_SCOPE=hardware-class \
 TREE_HMM_PRECISIONS_OVERRIDE=FP32 \
   bash "${root}/scripts/kaggle_accelerator_notebook.sh" "${source_root}" \
   > "${launcher_root}/rocm.log"
@@ -336,6 +428,7 @@ rm -rf "${working_root}/parallel-tree-inference"
 TREE_HMM_NOTEBOOK_INPUT_DIR="${launcher_root}/input" \
 TREE_HMM_NOTEBOOK_WORKING_DIR="${working_root}" \
 TREE_HMM_PRECISIONS_OVERRIDE=FP64 TREE_HMM_SKIP_FISH_TREE=0 \
+TREE_HMM_RESUME_SCOPE=hardware-class \
   bash "${root}/scripts/kaggle_cuda_notebook.sh" "${source_zip}" \
   > "${launcher_root}/zip.log"
 grep -Fq 'source bundle SHA-256:' "${launcher_root}/zip.log"

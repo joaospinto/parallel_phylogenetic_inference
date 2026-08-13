@@ -15,6 +15,7 @@ sh_test(
         "scripts/empirical_manifest_rows.py",
         "scripts/kaggle_accelerator_notebook.sh",
         "scripts/kaggle_cuda_notebook.sh",
+        "scripts/plot_synthetic_study.py",
         "scripts/summarize_benchmarks.py",
         "tests/benchmark_report_fixture.txt",
     ],

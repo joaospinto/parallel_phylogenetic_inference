@@ -102,6 +102,9 @@ site_batches_for() {
     fi
     [[ "${capped}" -eq "${unique_patterns}" ]] && break
   done
+  if [[ "${previous}" -ne "${unique_patterns}" ]]; then
+    echo "${unique_patterns}"
+  fi
 }
 
 total_cases=0

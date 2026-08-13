@@ -111,7 +111,7 @@ for topology in "${topologies[@]}"; do
           "${resume_report}" "${method}" "${precision_label}" \
           "${topology}" "${leaves}" "${patterns}" "${seed}" \
           "${replicate}" "${benchmark_mode}" \
-          "${resume_threads}"; then
+          "${resume_threads}" independent-taxa-pattern-grid; then
           completed_cases=$((completed_cases + 1))
           echo "# progress case=${completed_cases}/${total_cases}" \
             "status=resume-skip method=${method} precision=${precision_label}" \
@@ -127,7 +127,7 @@ for topology in "${topologies[@]}"; do
             "${resume_report}" "${method}" "${precision_label}" \
             "${topology}" "${leaves}" "${patterns}" "${seed}" \
             "${replicate}" "${benchmark_mode}" \
-            "${resume_threads}"; do
+            "${resume_threads}" independent-taxa-pattern-grid; do
           replicate=$((replicate + 1))
         done
         run_count=$((replicate - first_missing))
@@ -150,6 +150,7 @@ for topology in "${topologies[@]}"; do
           --seed "${seed}" --replicate-start "${first_missing}" \
           --replicates "${run_count}" --repeats "${repeats}" \
           --conditioning-ms "${conditioning_ms}" \
+          --study-label independent-taxa-pattern-grid \
           --benchmark-mode "${benchmark_mode}"
       done
     done

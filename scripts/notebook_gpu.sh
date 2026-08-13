@@ -432,7 +432,7 @@ for precision in "${precisions[@]}"; do
         if benchmark_resume_case_completed "${resume_report}" \
           "${accelerator_backend}" \
           "${precision}" synthetic "${topology}" "${leaves}" "${sites}" \
-          "${sites}" "${benchmark_mode}"; then
+          "${sites}" "${benchmark_mode}" "" standard; then
           echo "# resume_skip method=${accelerator_backend}" \
             "precision=${precision}" \
             "dataset=synthetic topology=${topology} leaves=${leaves}" \
@@ -472,7 +472,7 @@ for precision in "${precisions[@]}"; do
             if benchmark_resume_case_completed "${resume_report}" \
               "beagle-${resource}" "${precision}" synthetic \
               "${topology}" "${leaves}" "${sites}" "${sites}" \
-              "${benchmark_mode}" "${threads}"; then
+              "${benchmark_mode}" "${threads}" standard; then
               echo "# resume_skip method=beagle-${resource}" \
                 "precision=${precision} dataset=synthetic" \
                 "topology=${topology} leaves=${leaves} sites=${sites}" \

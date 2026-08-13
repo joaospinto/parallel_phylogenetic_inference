@@ -50,6 +50,7 @@ struct Options {
   std::string benchmark_mode = "full-input-update";
   std::string synthetic_sequence_model = "independent-patterns";
   std::optional<double> evolutionary_root_to_tip_distance;
+  std::string study = "standard";
   std::optional<std::filesystem::path> newick;
   std::optional<std::filesystem::path> fasta;
   std::optional<std::filesystem::path> phylip;
@@ -168,6 +169,13 @@ inline Options ParseOptions(int argc, char **argv) {
     } else if (option == "--evolutionary-root-to-tip-distance") {
       options.evolutionary_root_to_tip_distance = ParsePositiveDouble(
           argv[index], "evolutionary root-to-tip distance");
+    } else if (option == "--study-label") {
+      options.study = argv[index];
+      if (options.study.empty() || options.study.find(',') != std::string::npos ||
+          options.study.find('\n') != std::string::npos) {
+        throw std::invalid_argument(
+            "--study-label must be a nonempty CSV-safe value");
+      }
     } else if (option == "--newick") {
       options.newick = argv[index];
     } else if (option == "--fasta") {
@@ -837,7 +845,7 @@ inline void PrintHeader(const char *backend, const std::string &device,
       << "# execution_order=CPU and accelerator alternate for full-input; "
          "resident projections time the conventional CPU reference "
          "separately\n"
-      << "backend,precision,benchmark_mode,dataset,topology,sequence_generation,"
+      << "backend,precision,benchmark_mode,study,dataset,topology,sequence_generation,"
          "evolutionary_root_to_tip_distance,seed_base,seed,replicate,leaves,nodes,"
          "sites,unique_patterns,site_batch,cpu_reference_site_batch,binary_tree,tree_height,sackin_index,"
          "colless_index,normalized_colless,structural_rounds,"
@@ -881,6 +889,7 @@ inline void PrintRow(const char *backend, const Options &options,
   };
   std::cout << std::setprecision(10) << backend << ','
             << tree_hmm::kPrecisionName << ',' << options.benchmark_mode << ','
+            << options.study << ','
             << problem.dataset << ','
             << problem.topology << ',' << problem.sequence_generation << ',';
   if (problem.evolutionary_root_to_tip_distance.has_value())

@@ -15,6 +15,7 @@ from pathlib import Path
 IDENTITY = (
     "precision",
     "benchmark_mode",
+    "study",
     "dataset",
     "topology",
     "leaves",
@@ -106,6 +107,7 @@ def records(paths: list[Path]) -> list[dict[str, str]]:
                     )
                 row = dict(zip(header, fields))
                 row.setdefault("benchmark_mode", "full-input-update")
+                row.setdefault("study", "standard")
                 if row.get("baseline") == "beagle":
                     row.setdefault("threads", "1")
                 missing = [field for field in IDENTITY if field not in row]

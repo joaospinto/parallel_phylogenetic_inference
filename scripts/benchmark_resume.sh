@@ -14,12 +14,13 @@ benchmark_resume_case_completed() {
   local site_batch="$8"
   local benchmark_mode="${9:-}"
   local threads="${10:-}"
+  local study="${11:-standard}"
   [[ -n "${report}" && -r "${report}" ]] || return 1
   awk -F, -v method="${method}" -v precision="${precision}" \
     -v dataset="${dataset}" -v topology="${topology}" \
     -v leaves="${leaves}" -v sites="${sites}" \
     -v site_batch="${site_batch}" -v benchmark_mode="${benchmark_mode}" \
-    -v threads="${threads}" '
+    -v threads="${threads}" -v study="${study}" '
       function mode_matches() {
         if (benchmark_mode == "") return 1
         if ("benchmark_mode" in column)
@@ -30,6 +31,10 @@ benchmark_resume_case_completed() {
         if (threads == "") return 1
         if ("threads" in column) return $(column["threads"]) == threads
         return threads == "1"
+      }
+      function study_matches() {
+        if ("study" in column) return $(column["study"]) == study
+        return study == "standard"
       }
       $1 == "backend" && $2 == "precision" {
         delete column
@@ -51,12 +56,12 @@ benchmark_resume_case_completed() {
             $(column["leaves"]) == leaves &&
             $(column["sites"]) == sites &&
             $(column["site_batch"]) == site_batch &&
-            mode_matches() && thread_matches()) found = 1
+            mode_matches() && thread_matches() && study_matches()) found = 1
         else if (kind == "" && $1 == method && $2 == precision &&
                  $3 == dataset && $4 == topology && $5 == leaves &&
                  $7 == sites && $8 == site_batch &&
                  (benchmark_mode == "" || benchmark_mode == "full-input-update") &&
-                 (threads == "" || threads == "1")) found = 1
+                 (threads == "" || threads == "1") && study == "standard") found = 1
         next
       }
       {
@@ -68,12 +73,12 @@ benchmark_resume_case_completed() {
             $(column["topology"]) == topology &&
             $(column["leaves"]) == leaves && $(column["sites"]) == sites &&
             $(column["site_batch"]) == site_batch &&
-            mode_matches() && thread_matches()) found = 1
+            mode_matches() && thread_matches() && study_matches()) found = 1
         else if (kind == "" && $1 == "beagle" && $2 == resource &&
                  $3 == precision && $4 == dataset && $5 == topology &&
                  $6 == leaves && $8 == sites && $9 == site_batch &&
                  (benchmark_mode == "" || benchmark_mode == "full-input-update") &&
-                 (threads == "" || threads == "1")) found = 1
+                 (threads == "" || threads == "1") && study == "standard") found = 1
       }
       END { exit !found }
     ' "${report}"
@@ -90,12 +95,13 @@ benchmark_resume_synthetic_replicate_completed() {
   local replicate="$8"
   local benchmark_mode="${9:-}"
   local threads="${10:-}"
+  local study="${11:-independent-taxa-pattern-grid}"
   [[ -n "${report}" && -r "${report}" ]] || return 1
   awk -F, -v method="${method}" -v precision="${precision}" \
     -v topology="${topology}" -v leaves="${leaves}" \
     -v patterns="${patterns}" -v seed_base="${seed_base}" \
     -v replicate="${replicate}" -v benchmark_mode="${benchmark_mode}" \
-    -v threads="${threads}" '
+    -v threads="${threads}" -v study="${study}" '
       function mode_matches() {
         if (benchmark_mode == "") return 1
         if ("benchmark_mode" in column)
@@ -106,6 +112,10 @@ benchmark_resume_synthetic_replicate_completed() {
         if (threads == "") return 1
         if ("threads" in column) return $(column["threads"]) == threads
         return threads == "1"
+      }
+      function study_matches() {
+        if ("study" in column) return $(column["study"]) == study
+        return study == "standard"
       }
       $1 == "backend" && $2 == "precision" {
         delete column
@@ -133,7 +143,7 @@ benchmark_resume_synthetic_replicate_completed() {
             $(column["unique_patterns"]) == patterns &&
             $(column["seed_base"]) == seed_base &&
             $(column["replicate"]) == replicate &&
-            mode_matches() && thread_matches()) found = 1
+            mode_matches() && thread_matches() && study_matches()) found = 1
       }
       END { exit !found }
     ' "${report}"
@@ -151,12 +161,14 @@ benchmark_resume_jc69_replicate_completed() {
   local replicate="$9"
   local benchmark_mode="${10:-}"
   local threads="${11:-}"
+  local study="${12:-clock-like-jc69-simulation}"
   [[ -n "${report}" && -r "${report}" ]] || return 1
   awk -F, -v method="${method}" -v precision="${precision}" \
     -v topology="${topology}" -v leaves="${leaves}" \
     -v raw_sites="${raw_sites}" -v evolutionary_height="${evolutionary_height}" \
     -v seed_base="${seed_base}" -v replicate="${replicate}" \
-    -v benchmark_mode="${benchmark_mode}" -v threads="${threads}" '
+    -v benchmark_mode="${benchmark_mode}" -v threads="${threads}" \
+    -v study="${study}" '
       $1 == "backend" && $2 == "precision" {
         delete column
         for (field_index = 1; field_index <= NF; ++field_index) column[$(field_index)] = field_index
@@ -178,6 +190,7 @@ benchmark_resume_jc69_replicate_completed() {
           mode_matches = $(column["benchmark_mode"]) == benchmark_mode
         else
           mode_matches = benchmark_mode == "full-input-update"
+        study_matches = ("study" in column) && $(column["study"]) == study
         observed_height = ""
         if ("evolutionary_root_to_tip_distance" in column)
           observed_height = $(column["evolutionary_root_to_tip_distance"]) + 0
@@ -194,6 +207,7 @@ benchmark_resume_jc69_replicate_completed() {
             observed_height == evolutionary_height + 0 &&
             $(column["seed_base"]) == seed_base &&
             $(column["replicate"]) == replicate &&
+            study_matches &&
             mode_matches &&
             (kind != "beagle" || threads == "" ||
              $(column["threads"]) == threads)) found = 1

@@ -55,6 +55,10 @@ def study_design(paths: list[Path]) -> tuple[set[str], set[int], set[int], int, 
                 continue
             key, value = line[2:].split("=", 1)
             if key in keys:
+                if key in values and values[key] != value:
+                    raise ValueError(
+                        f"{path} contains conflicting {key} declarations"
+                    )
                 values[key] = value
         missing = keys - set(values)
         if missing:
@@ -100,7 +104,12 @@ def rows(paths: list[Path]) -> list[dict[str, str]]:
                 if header is None or len(fields) != len(header):
                     continue
                 row = dict(zip(header, fields))
-                if row.get("dataset") != "synthetic" or "replicate" not in row:
+                row.setdefault("study", "standard")
+                if (
+                    row.get("dataset") != "synthetic"
+                    or row["study"] != "independent-taxa-pattern-grid"
+                    or "replicate" not in row
+                ):
                     continue
                 row["source"] = f"{path}:{line_number}"
                 result.append(row)
