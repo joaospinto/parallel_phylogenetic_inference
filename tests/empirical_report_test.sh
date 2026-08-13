@@ -20,7 +20,7 @@ cat > "${report}" <<EOF
 # planned_cases=7
 # method_order_policy=cyclic rotation by empirical dataset/site-batch case
 # declared_method_sequence=cuda beagle-cpu:1 beagle-cuda
-# progress case=1/7 method=cuda precision=FP32 dataset=problem-a site_batch=64
+# progress case=1/7 method=cuda precision=FP32 dataset=problem-a site_batch=64 requested_site_batches=64 planned_cases=7
 backend,precision,benchmark_mode,study,dataset,topology,minimum_branch_length,floored_branch_count,leaves,nodes,sites,unique_patterns,site_batch,cpu_ms,measured_total_ms,max_abs_error,max_relative_error
 cuda,FP32,full-input-update,${study},problem-a,empirical,0.000001,0,100,199,1000,100,64,8,2,0.001,0.0001
 cuda,FP32,full-input-update,${study},problem-a,empirical,0.000001,0,100,199,1000,100,100,8,1,0.001,0.0001
@@ -36,7 +36,7 @@ cuda,FP32,full-input-update,${study},problem-c,empirical,0.000001,0,5000,9999,40
 # planned_cases=7
 # method_order_policy=cyclic rotation by empirical dataset/site-batch case
 # declared_method_sequence=cuda beagle-cpu:1 beagle-cuda
-# progress case=1/7 method=beagle-cpu precision=FP32 dataset=problem-a site_batch=64
+# progress case=1/7 method=beagle-cpu precision=FP32 dataset=problem-a site_batch=64 requested_site_batches=64 planned_cases=7
 baseline,beagle_resource,precision,benchmark_mode,study,dataset,topology,minimum_branch_length,floored_branch_count,leaves,nodes,sites,unique_patterns,site_batch,threads,sequential_ms,beagle_total_ms,max_abs_error,max_relative_error
 beagle,cpu,FP32,full-input-update,${study},problem-a,empirical,0.000001,0,100,199,1000,100,64,1,8,2,0.001,0.0001
 beagle,cpu,FP32,full-input-update,${study},problem-a,empirical,0.000001,0,100,199,1000,100,100,1,8,3,0.001,0.0001
@@ -52,7 +52,7 @@ beagle,cpu,FP32,full-input-update,${study},problem-c,empirical,0.000001,0,5000,9
 # planned_cases=7
 # method_order_policy=cyclic rotation by empirical dataset/site-batch case
 # declared_method_sequence=cuda beagle-cpu:1 beagle-cuda
-# progress case=1/7 method=beagle-cuda precision=FP32 dataset=problem-a site_batch=64
+# progress case=1/7 method=beagle-cuda precision=FP32 dataset=problem-a site_batch=64 requested_site_batches=64 planned_cases=7
 baseline,beagle_resource,precision,benchmark_mode,study,dataset,topology,minimum_branch_length,floored_branch_count,leaves,nodes,sites,unique_patterns,site_batch,threads,sequential_ms,beagle_total_ms,max_abs_error,max_relative_error
 beagle,cuda,FP32,full-input-update,${study},problem-a,empirical,0.000001,0,100,199,1000,100,64,1,8,1.5,0.001,0.0001
 beagle,cuda,FP32,full-input-update,${study},problem-a,empirical,0.000001,0,100,199,1000,100,100,1,8,2,0.001,0.0001

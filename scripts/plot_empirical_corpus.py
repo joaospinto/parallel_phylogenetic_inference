@@ -228,7 +228,11 @@ def parse_protocol(
                     "method_order_policy",
                     "declared_method_sequence",
                 }
-                combined = pending | progress
+                # The preceding declaration lines are canonical.  Progress
+                # records are intentionally shell-friendly and may repeat only
+                # the first token of a space-separated value (for example the
+                # first requested batch); they must not truncate declarations.
+                combined = progress | pending
                 missing = required - set(combined)
                 if missing:
                     raise ValueError(
