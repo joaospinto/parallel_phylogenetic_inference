@@ -139,6 +139,63 @@ benchmark_resume_synthetic_replicate_completed() {
     ' "${report}"
 }
 
+benchmark_resume_jc69_replicate_completed() {
+  local report="$1"
+  local method="$2"
+  local precision="$3"
+  local topology="$4"
+  local leaves="$5"
+  local raw_sites="$6"
+  local evolutionary_height="$7"
+  local seed_base="$8"
+  local replicate="$9"
+  local benchmark_mode="${10:-}"
+  local threads="${11:-}"
+  [[ -n "${report}" && -r "${report}" ]] || return 1
+  awk -F, -v method="${method}" -v precision="${precision}" \
+    -v topology="${topology}" -v leaves="${leaves}" \
+    -v raw_sites="${raw_sites}" -v evolutionary_height="${evolutionary_height}" \
+    -v seed_base="${seed_base}" -v replicate="${replicate}" \
+    -v benchmark_mode="${benchmark_mode}" -v threads="${threads}" '
+      $1 == "backend" && $2 == "precision" {
+        delete column
+        for (field_index = 1; field_index <= NF; ++field_index) column[$(field_index)] = field_index
+        kind = "native"
+        next
+      }
+      $1 == "baseline" && $2 == "beagle_resource" {
+        delete column
+        for (field_index = 1; field_index <= NF; ++field_index) column[$(field_index)] = field_index
+        kind = "beagle"
+        next
+      }
+      {
+        resource = substr(method, 8)
+        observed_height = ""
+        if ("evolutionary_root_to_tip_distance" in column)
+          observed_height = $(column["evolutionary_root_to_tip_distance"]) + 0
+        matching_method = ((kind == "native" &&
+                            $(column["backend"]) == method) ||
+                           (kind == "beagle" &&
+                            $(column["baseline"]) == "beagle" &&
+                            $(column["beagle_resource"]) == resource))
+        if (matching_method && $(column["precision"]) == precision &&
+            $(column["dataset"]) == "synthetic-jc69" &&
+            $(column["topology"]) == topology &&
+            $(column["leaves"]) == leaves &&
+            $(column["sites"]) == raw_sites &&
+            observed_height == evolutionary_height + 0 &&
+            $(column["seed_base"]) == seed_base &&
+            $(column["replicate"]) == replicate &&
+            (kind != "beagle" || benchmark_mode == "" ||
+             $(column["benchmark_mode"]) == benchmark_mode) &&
+            (kind != "beagle" || threads == "" ||
+             $(column["threads"]) == threads)) found = 1
+      }
+      END { exit !found }
+    ' "${report}"
+}
+
 benchmark_resume_dataset_batch_completed() {
   local report="$1"
   local method="$2"

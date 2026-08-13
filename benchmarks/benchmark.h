@@ -48,6 +48,8 @@ struct Options {
   std::size_t replicates = 1;
   bool compress_patterns = false;
   std::string benchmark_mode = "full-input-update";
+  std::string synthetic_sequence_model = "independent-patterns";
+  std::optional<double> evolutionary_root_to_tip_distance;
   std::optional<std::filesystem::path> newick;
   std::optional<std::filesystem::path> fasta;
   std::optional<std::filesystem::path> phylip;
@@ -71,6 +73,8 @@ struct Problem {
   std::size_t replicate = 0;
   double planning_ms = 0.0;
   TreeShapeStatistics shape;
+  std::string sequence_generation = "empirical";
+  std::optional<double> evolutionary_root_to_tip_distance;
 };
 
 inline std::size_t ParseSize(const char *text, const char *description) {
@@ -92,6 +96,14 @@ inline std::size_t ParseNonnegativeSize(const char *text,
     throw std::invalid_argument(std::string("invalid ") + description);
   }
   return static_cast<std::size_t>(value);
+}
+
+inline double ParsePositiveDouble(const char *text, const char *description) {
+  char *end = nullptr;
+  const double value = std::strtod(text, &end);
+  if (text == end || *end != '\0' || !(value > 0.0) || !std::isfinite(value))
+    throw std::invalid_argument(std::string("invalid ") + description);
+  return value;
 }
 
 inline Options ParseOptions(int argc, char **argv) {
@@ -146,6 +158,16 @@ inline Options ParseOptions(int argc, char **argv) {
             "--benchmark-mode must be fixed-model, factor-update, or "
             "full-input-update");
       }
+    } else if (option == "--synthetic-sequence-model") {
+      options.synthetic_sequence_model = argv[index];
+      if (options.synthetic_sequence_model != "independent-patterns" &&
+          options.synthetic_sequence_model != "jc69") {
+        throw std::invalid_argument(
+            "--synthetic-sequence-model must be independent-patterns or jc69");
+      }
+    } else if (option == "--evolutionary-root-to-tip-distance") {
+      options.evolutionary_root_to_tip_distance = ParsePositiveDouble(
+          argv[index], "evolutionary root-to-tip distance");
     } else if (option == "--newick") {
       options.newick = argv[index];
     } else if (option == "--fasta") {
@@ -189,6 +211,22 @@ inline Options ParseOptions(int argc, char **argv) {
       (options.replicates != 1 || options.replicate_start != 0)) {
     throw std::invalid_argument(
         "--replicates and --replicate-start apply only to synthetic trees");
+  }
+  if (has_alignment &&
+      (options.synthetic_sequence_model != "independent-patterns" ||
+       options.evolutionary_root_to_tip_distance.has_value())) {
+    throw std::invalid_argument(
+        "synthetic sequence options do not apply to empirical alignments");
+  }
+  if (options.synthetic_sequence_model == "jc69" &&
+      !options.evolutionary_root_to_tip_distance.has_value()) {
+    throw std::invalid_argument(
+        "JC69 simulation requires --evolutionary-root-to-tip-distance");
+  }
+  if (options.synthetic_sequence_model != "jc69" &&
+      options.evolutionary_root_to_tip_distance.has_value()) {
+    throw std::invalid_argument(
+        "--evolutionary-root-to-tip-distance applies only to JC69 simulation");
   }
   return options;
 }
@@ -299,7 +337,9 @@ inline Problem MakeProblem(const Options &options, std::size_t replicate = 0) {
                    options.seed,
                    0,
                    planning_ms,
-                   {}};
+                   {},
+                   "empirical",
+                   std::nullopt};
     if (options.compress_patterns)
       CompressPatterns(result);
     result.shape = ShapeStatistics(result.plan);
@@ -308,29 +348,45 @@ inline Problem MakeProblem(const Options &options, std::size_t replicate = 0) {
 
   const std::size_t leaves = options.leaves;
   const std::size_t sites = options.sites;
+  const bool simulate_jc69 = options.synthetic_sequence_model == "jc69";
+  const std::uint64_t topology_seed =
+      simulate_jc69
+          ? SyntheticTopologySeed(options.seed, leaves, replicate,
+                                  options.topology)
+          : SyntheticSeed(options.seed, leaves, sites, replicate,
+                          options.topology);
   const std::uint64_t seed =
-      SyntheticSeed(options.seed, leaves, sites, replicate, options.topology);
+      simulate_jc69
+          ? SyntheticSequenceSeed(topology_seed, sites,
+                                  *options.evolutionary_root_to_tip_distance)
+          : topology_seed;
   SyntheticTopology topology =
-      MakeSyntheticTopology(options.topology, leaves, seed);
+      MakeSyntheticTopology(options.topology, leaves, topology_seed);
   const Clock::time_point planning_begin = Clock::now();
   btrc::Plan plan = btrc::MakePlan(topology.parents);
   const double planning_ms = Milliseconds(planning_begin, Clock::now());
-  // AlignmentModelView requires observation nodes in increasing plan order.
-  // Synthetic columns have no external taxon labels, so canonicalizing the
-  // leaf order before generating their observations changes no dataset
-  // semantics.
-  std::sort(topology.leaves.begin(), topology.leaves.end());
-  std::vector<Scalar> lengths(plan.num_edges());
-  for (std::size_t edge = 0; edge < lengths.size(); ++edge)
-    lengths[edge] = Scalar{0.02} + Scalar{0.18} * static_cast<Scalar>(
-                                                DeterministicRandom(seed + edge)
-                                                    .Unit());
+  std::vector<Scalar> lengths;
+  if (simulate_jc69) {
+    lengths = MakeClockLikeBranchLengths(
+        plan, *options.evolutionary_root_to_tip_distance);
+  } else {
+    lengths.resize(plan.num_edges());
+    for (std::size_t edge = 0; edge < lengths.size(); ++edge)
+      lengths[edge] = Scalar{0.02} + Scalar{0.18} * static_cast<Scalar>(
+                                                  DeterministicRandom(seed + edge)
+                                                      .Unit());
+  }
+  std::vector<Nucleotide> observations =
+      simulate_jc69
+          ? SimulateJukesCantorAlignment(plan, lengths, topology.leaves, sites,
+                                         seed)
+          : MakeUniquePatterns(sites, leaves, seed);
 
   Problem result{std::move(plan),
                  std::move(lengths),
                  std::move(topology.leaves),
-                 MakeUniquePatterns(sites, leaves, seed),
-                 "synthetic",
+                 std::move(observations),
+                 simulate_jc69 ? "synthetic-jc69" : "synthetic",
                  options.topology,
                  leaves,
                  sites,
@@ -340,7 +396,11 @@ inline Problem MakeProblem(const Options &options, std::size_t replicate = 0) {
                  seed,
                  replicate,
                  planning_ms,
-                 {}};
+                 {},
+                 options.synthetic_sequence_model,
+                 options.evolutionary_root_to_tip_distance};
+  if (simulate_jc69 && options.compress_patterns)
+    CompressPatterns(result);
   result.shape = ShapeStatistics(result.plan);
   return result;
 }
@@ -747,6 +807,13 @@ inline void PrintHeader(const char *backend, const std::string &device,
       << "# dataset=" << problem.dataset << '\n'
       << "# topology=" << problem.topology << "-bifurcating-jc69\n"
       << "# benchmark_mode=" << options.benchmark_mode << '\n'
+      << "# sequence_generation=" << problem.sequence_generation << '\n'
+      << "# topological_height_edges=" << problem.shape.height << '\n';
+  if (problem.evolutionary_root_to_tip_distance.has_value()) {
+    std::cout << "# evolutionary_root_to_tip_distance="
+              << *problem.evolutionary_root_to_tip_distance << '\n';
+  }
+  std::cout
       << "# timing_prepared=host wall time inside the preallocated tree-HMM "
          "backend; it includes only the input transfers selected by "
          "benchmark_mode, computation, and result transfer\n"
@@ -780,7 +847,8 @@ inline void PrintHeader(const char *backend, const std::string &device,
       << "# execution_order=CPU and accelerator alternate for full-input; "
          "resident projections time the conventional CPU reference "
          "separately\n"
-      << "backend,precision,benchmark_mode,dataset,topology,seed_base,seed,replicate,leaves,nodes,"
+      << "backend,precision,benchmark_mode,dataset,topology,sequence_generation,"
+         "evolutionary_root_to_tip_distance,seed_base,seed,replicate,leaves,nodes,"
          "sites,unique_patterns,site_batch,cpu_reference_site_batch,binary_tree,tree_height,sackin_index,"
          "colless_index,normalized_colless,structural_rounds,"
          "primitive_levels,primitive_operations,planning_ms,"
@@ -824,7 +892,10 @@ inline void PrintRow(const char *backend, const Options &options,
   std::cout << std::setprecision(10) << backend << ','
             << tree_hmm::kPrecisionName << ',' << options.benchmark_mode << ','
             << problem.dataset << ','
-            << problem.topology << ',' << problem.base_seed << ','
+            << problem.topology << ',' << problem.sequence_generation << ',';
+  if (problem.evolutionary_root_to_tip_distance.has_value())
+    std::cout << *problem.evolutionary_root_to_tip_distance;
+  std::cout << ',' << problem.base_seed << ','
             << problem.seed << ','
             << problem.replicate << ',' << problem.leaves << ','
             << problem.plan.num_nodes() << ',' << problem.raw_sites << ','

@@ -201,6 +201,43 @@ scripts/plot_synthetic_study.py native.log beagle.log \
   --output-directory figures
 ```
 
+A complementary simulation study measures the same complete-likelihood
+workload on biologically calibrated inputs. For each of the four topology
+distributions, it constructs a clock-like tree whose branch lengths make every
+root-to-tip path equal a prescribed evolutionary distance, simulates raw DNA
+sequences under JC69 using those exact branch lengths, and performs exact
+duplicate-pattern compression before timing. Each row retains both the raw
+sequence length and the resulting number and multiplicities of unique
+patterns. Here, *evolutionary root-to-tip distance* is measured in expected
+substitutions per site and is distinct from the integer topological height in
+edges that is also reported.
+
+The default `smoke` profile is deliberately modest. The opt-in `complete`
+profile uses 100 replicates of 100, 1,000, and 10,000 taxa; 1,000, 10,000, and
+100,000 raw sites; and evolutionary root-to-tip distances 0.0001, 0.001, 0.01,
+and 0.1. Individual axes and replicate counts can be overridden through the
+script's `TREE_HMM_JC69_*` environment variables.
+
+```sh
+PRECISION=fp32 scripts/benchmark_jc69_simulations.sh cuda
+PRECISION=fp32 BEAGLE_THREADS=1 \
+  scripts/benchmark_jc69_simulations.sh beagle-cpu
+scripts/plot_jc69_simulation_study.py native.log beagle.log \
+  --native cuda --baseline beagle-cpu --precision FP32 \
+  --output-directory figures
+
+# Explicit, large paper profile:
+TREE_HMM_JC69_PROFILE=complete PRECISION=fp32 \
+  scripts/benchmark_jc69_simulations.sh cuda
+```
+
+This experiment complements rather than replaces the independent taxa-by-
+unique-pattern grid. The independent grid identifies hardware crossover as a
+function of computational size without confounding it with evolutionary
+redundancy. The JC69 study instead shows which points on that grid arise after
+exact pattern compression at specified evolutionary distances. It benchmarks
+complete likelihood evaluation, not a site-order incremental-update method.
+
 Native and BEAGLE rows distinguish `fixed-model` (all observations and numerical factors
 already installed), `factor-update` (observations retained while JC69 factors
 and transition matrices are refreshed), and `full-input-update` (tips and

@@ -69,7 +69,6 @@ benchmark_resume_synthetic_replicate_completed "${new_report}" beagle-cuda \
   FP32 yule 128 64 20260813 0 fixed-model 1
 ! benchmark_resume_synthetic_replicate_completed "${new_report}" beagle-cuda \
   FP32 yule 128 64 20260813 0 factor-update 2
-
 mixed_report="${work_directory}/mixed-report.txt"
 cat > "${mixed_report}" <<'EOF'
 backend,precision,task,dataset,topology,seed_base,seed,replicate,leaves,nodes,unique_patterns,tree_height,normalized_colless,primitive_levels,benchmark_mode,planning_ms,workspace_setup_ms,repeats,median_ms,p25_ms,p75_ms,samples_ms
@@ -112,6 +111,23 @@ grep -Fq '# resume_capacity_limit method=metal precision=FP32 dataset=large site
   "${manifest_directory}/dry-run.txt"
 ! grep -Fq 'dataset=large taxa=10 raw_sites=100000 unique_patterns=100000 site_batch=4096' \
   "${manifest_directory}/dry-run.txt"
+
+cat >> "${new_report}" <<'EOF'
+backend,precision,dataset,topology,sequence_generation,evolutionary_root_to_tip_distance,seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,site_batch
+cuda,FP32,synthetic-jc69,yule,jc69,0.001,20260814,910,2,128,255,1024,813,813
+baseline,beagle_resource,precision,benchmark_mode,dataset,topology,sequence_generation,evolutionary_root_to_tip_distance,seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,site_batch,threads
+beagle,cpu,FP32,full-input-update,synthetic-jc69,yule,jc69,0.001,20260814,910,2,128,255,1024,813,813,4
+EOF
+benchmark_resume_jc69_replicate_completed "${new_report}" cuda FP32 yule \
+  128 1024 0.001 20260814 2
+! benchmark_resume_jc69_replicate_completed "${new_report}" cuda FP32 yule \
+  128 1024 0.01 20260814 2
+! benchmark_resume_jc69_replicate_completed "${new_report}" cuda FP32 yule \
+  128 1024 0.001 20260814 3
+benchmark_resume_jc69_replicate_completed "${new_report}" beagle-cpu FP32 \
+  yule 128 1024 0.001 20260814 2 full-input-update 4
+! benchmark_resume_jc69_replicate_completed "${new_report}" beagle-cpu FP32 \
+  yule 128 1024 0.001 20260814 2 factor-update 4
 mock_rocm="${work_directory}/rocm"
 mkdir -p "${mock_rocm}/bin" "${mock_rocm}/lib"
 printf '%s\n' '#!/usr/bin/env bash' 'echo "  Name: gfx942"' > \

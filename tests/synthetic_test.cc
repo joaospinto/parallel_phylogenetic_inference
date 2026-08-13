@@ -1,8 +1,10 @@
 #include "benchmarks/benchmark.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -46,6 +48,15 @@ int main() {
     }
     Check(first.leaves == actual_leaves);
     const btrc::Plan plan = btrc::MakePlan(first.parents);
+    std::vector<std::size_t> out_degree(plan.num_nodes());
+    for (const btrc::Index parent : plan.edge_parents())
+      ++out_degree[parent];
+    std::vector<btrc::Index> actual_tips;
+    for (std::size_t node = 0; node < out_degree.size(); ++node) {
+      if (out_degree[node] == 0)
+        actual_tips.push_back(static_cast<btrc::Index>(node));
+    }
+    Check(first.leaves == actual_tips);
     const TreeShapeStatistics shape = ShapeStatistics(plan);
     Check(shape.binary);
     Check(shape.height > 0);
@@ -121,4 +132,95 @@ int main() {
   Check(repeated.sites == 2);
   Check((repeated.pattern_weights == std::vector<std::uint64_t>{2, 2}));
   Check(repeated.observations.size() == 4);
+
+  for (const std::string topology : {"yule", "beta-critical", "uniform",
+                                     "caterpillar"}) {
+    const SyntheticTopology clock_topology =
+        MakeSyntheticTopology(topology, 32, 71);
+    const btrc::Plan clock_plan = btrc::MakePlan(clock_topology.parents);
+    constexpr double kEvolutionaryHeight = 0.1;
+    const std::vector<parallel_phylogenetics::Scalar> branch_lengths =
+        MakeClockLikeBranchLengths(clock_plan, kEvolutionaryHeight);
+    for (const double distance : RootToTipDistances(
+             clock_plan, branch_lengths, clock_topology.leaves)) {
+      Check(std::abs(distance - kEvolutionaryHeight) <= 2e-7);
+    }
+    const auto first_simulation = SimulateJukesCantorAlignment(
+        clock_plan, branch_lengths, clock_topology.leaves, 64, 8128);
+    const auto repeated_simulation = SimulateJukesCantorAlignment(
+        clock_plan, branch_lengths, clock_topology.leaves, 64, 8128);
+    const auto different_simulation = SimulateJukesCantorAlignment(
+        clock_plan, branch_lengths, clock_topology.leaves, 64, 8129);
+    Check(first_simulation == repeated_simulation);
+    Check(first_simulation != different_simulation);
+  }
+
+  Options raw_options;
+  raw_options.topology = "yule";
+  raw_options.leaves = 16;
+  raw_options.sites = 256;
+  raw_options.seed = 9102;
+  raw_options.synthetic_sequence_model = "jc69";
+  raw_options.evolutionary_root_to_tip_distance = 0.0001;
+  const Problem raw = MakeProblem(raw_options);
+  Options compressed_options = raw_options;
+  compressed_options.compress_patterns = true;
+  const Problem compressed = MakeProblem(compressed_options);
+  Check(raw.dataset == "synthetic-jc69");
+  Check(raw.raw_sites == raw_options.sites);
+  Check(raw.sites == raw_options.sites);
+  Check(compressed.raw_sites == raw_options.sites);
+  Check(compressed.sites < compressed.raw_sites);
+  Check(std::accumulate(compressed.pattern_weights.begin(),
+                        compressed.pattern_weights.end(), std::uint64_t{0}) ==
+        compressed.raw_sites);
+  Check(raw.branch_lengths == compressed.branch_lengths);
+  Check(raw.observation_nodes == compressed.observation_nodes);
+
+  Options longer_options = raw_options;
+  longer_options.sites = 512;
+  const Problem longer = MakeProblem(longer_options);
+  Check(std::equal(raw.plan.edge_parents().begin(),
+                   raw.plan.edge_parents().end(),
+                   longer.plan.edge_parents().begin()));
+  Check(std::equal(raw.plan.edge_children().begin(),
+                   raw.plan.edge_children().end(),
+                   longer.plan.edge_children().begin()));
+  Check(raw.branch_lengths == longer.branch_lengths);
+  Check(raw.seed != longer.seed);
+  Options taller_options = raw_options;
+  taller_options.evolutionary_root_to_tip_distance = 0.01;
+  const Problem taller = MakeProblem(taller_options);
+  Check(std::equal(raw.plan.edge_parents().begin(),
+                   raw.plan.edge_parents().end(),
+                   taller.plan.edge_parents().begin()));
+  Check(std::equal(raw.plan.edge_children().begin(),
+                   raw.plan.edge_children().end(),
+                   taller.plan.edge_children().begin()));
+  Check(raw.branch_lengths != taller.branch_lengths);
+  Check(raw.seed != taller.seed);
+
+  parallel_phylogenetics::SequentialWorkspace raw_workspace;
+  raw_workspace.Reserve(raw.plan, raw.sites);
+  const auto raw_values = parallel_phylogenetics::LogLikelihoodsPrepared(
+      {raw.plan, raw.sites, raw.branch_lengths, raw.observation_nodes,
+       raw.observations},
+      raw_workspace);
+  parallel_phylogenetics::SequentialWorkspace compressed_workspace;
+  compressed_workspace.Reserve(compressed.plan, compressed.sites);
+  const auto compressed_values =
+      parallel_phylogenetics::LogLikelihoodsPrepared(
+          {compressed.plan, compressed.sites, compressed.branch_lengths,
+           compressed.observation_nodes, compressed.observations},
+          compressed_workspace);
+  double raw_log_likelihood = 0.0;
+  for (const auto value : raw_values)
+    raw_log_likelihood += value;
+  double compressed_log_likelihood = 0.0;
+  for (std::size_t pattern = 0; pattern < compressed.sites; ++pattern) {
+    compressed_log_likelihood += compressed.pattern_weights[pattern] *
+                                 compressed_values[pattern];
+  }
+  Check(std::abs(raw_log_likelihood - compressed_log_likelihood) <=
+        2e-6 * std::max(1.0, std::abs(raw_log_likelihood)));
 }

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -54,6 +55,30 @@ inline std::uint64_t SyntheticSeed(std::uint64_t base, std::size_t leaves,
   for (const unsigned char character : topology)
     result = DeterministicRandom(result ^ character).Next();
   return result;
+}
+
+inline std::uint64_t SyntheticTopologySeed(std::uint64_t base,
+                                           std::size_t leaves,
+                                           std::size_t replicate,
+                                           std::string_view topology) {
+  DeterministicRandom random(base ^ static_cast<std::uint64_t>(leaves));
+  std::uint64_t result = random.Next();
+  result ^= DeterministicRandom(result + replicate).Next();
+  for (const unsigned char character : topology)
+    result = DeterministicRandom(result ^ character).Next();
+  return result;
+}
+
+inline std::uint64_t SyntheticSequenceSeed(std::uint64_t topology_seed,
+                                           std::size_t raw_sites,
+                                           double evolutionary_height) {
+  static_assert(sizeof(double) == sizeof(std::uint64_t));
+  std::uint64_t result =
+      DeterministicRandom(topology_seed ^ static_cast<std::uint64_t>(raw_sites))
+          .Next();
+  return DeterministicRandom(
+             result ^ std::bit_cast<std::uint64_t>(evolutionary_height))
+      .Next();
 }
 
 struct SyntheticTopology {
@@ -174,16 +199,176 @@ inline SyntheticTopology MakeSyntheticTopology(std::string_view topology,
     throw std::length_error("synthetic tree exceeds the planner index limit");
   SyntheticTopology result;
   DeterministicRandom random(seed);
-  if (topology == "yule" || topology == "uniform")
-    return MakeGrowthTopology(topology, leaves, random);
-  result.parents.reserve(2 * leaves - 1);
-  result.leaves.reserve(leaves);
-  std::vector<double> harmonic_numbers(leaves);
-  for (std::size_t index = 1; index < leaves; ++index)
-    harmonic_numbers[index] =
-        harmonic_numbers[index - 1] + 1.0 / static_cast<double>(index);
-  BuildSyntheticTree(topology, leaves, random, harmonic_numbers, result);
+  if (topology == "yule" || topology == "uniform") {
+    result = MakeGrowthTopology(topology, leaves, random);
+  } else {
+    result.parents.reserve(2 * leaves - 1);
+    result.leaves.reserve(leaves);
+    std::vector<double> harmonic_numbers(leaves);
+    for (std::size_t index = 1; index < leaves; ++index)
+      harmonic_numbers[index] =
+          harmonic_numbers[index - 1] + 1.0 / static_cast<double>(index);
+    BuildSyntheticTree(topology, leaves, random, harmonic_numbers, result);
+  }
+  std::sort(result.leaves.begin(), result.leaves.end());
   return result;
+}
+
+inline std::vector<Scalar>
+MakeClockLikeBranchLengths(const btrc::Plan &plan,
+                           double evolutionary_root_to_tip_distance) {
+  if (!(evolutionary_root_to_tip_distance > 0.0) ||
+      !std::isfinite(evolutionary_root_to_tip_distance)) {
+    throw std::invalid_argument(
+        "the evolutionary root-to-tip distance must be finite and positive");
+  }
+  const std::size_t nodes = plan.num_nodes();
+  std::vector<std::vector<std::size_t>> child_edges(nodes);
+  for (std::size_t edge = 0; edge < plan.num_edges(); ++edge)
+    child_edges[plan.edge_parents()[edge]].push_back(edge);
+
+  std::vector<btrc::Index> preorder{plan.root()};
+  preorder.reserve(nodes);
+  for (std::size_t index = 0; index < preorder.size(); ++index) {
+    for (const std::size_t edge : child_edges[preorder[index]])
+      preorder.push_back(plan.edge_children()[edge]);
+  }
+  if (preorder.size() != nodes)
+    throw std::invalid_argument("clock-like branch lengths require a tree");
+
+  // The backward topological height is zero at every tip and one plus the
+  // largest child height at an internal node. Mapping it linearly to
+  // evolutionary time makes every edge positive and every root-to-tip path
+  // telescope to the requested evolutionary distance, independently of the
+  // number of edges on that path.
+  std::vector<std::size_t> backward_height(nodes);
+  for (auto iterator = preorder.rbegin(); iterator != preorder.rend();
+       ++iterator) {
+    const btrc::Index node = *iterator;
+    for (const std::size_t edge : child_edges[node]) {
+      backward_height[node] =
+          std::max(backward_height[node],
+                   backward_height[plan.edge_children()[edge]] + 1);
+    }
+  }
+  const std::size_t root_height = backward_height[plan.root()];
+  if (root_height == 0)
+    throw std::invalid_argument("clock-like branch lengths require an edge");
+
+  std::vector<Scalar> lengths(plan.num_edges());
+  for (std::size_t edge = 0; edge < plan.num_edges(); ++edge) {
+    const std::size_t parent_height = backward_height[plan.edge_parents()[edge]];
+    const std::size_t child_height = backward_height[plan.edge_children()[edge]];
+    lengths[edge] = static_cast<Scalar>(
+        evolutionary_root_to_tip_distance *
+        static_cast<double>(parent_height - child_height) /
+        static_cast<double>(root_height));
+    if (!(lengths[edge] > Scalar{0}))
+      throw std::underflow_error("clock-like branch length rounded to zero");
+  }
+  return lengths;
+}
+
+inline std::vector<double>
+RootToTipDistances(const btrc::Plan &plan,
+                   std::span<const Scalar> branch_lengths,
+                   std::span<const btrc::Index> tips) {
+  if (branch_lengths.size() != plan.num_edges())
+    throw std::invalid_argument("one branch length is required per edge");
+  std::vector<std::vector<std::size_t>> child_edges(plan.num_nodes());
+  for (std::size_t edge = 0; edge < plan.num_edges(); ++edge)
+    child_edges[plan.edge_parents()[edge]].push_back(edge);
+  std::vector<double> distance(plan.num_nodes());
+  std::vector<btrc::Index> preorder{plan.root()};
+  for (std::size_t index = 0; index < preorder.size(); ++index) {
+    const btrc::Index parent = preorder[index];
+    for (const std::size_t edge : child_edges[parent]) {
+      const btrc::Index child = plan.edge_children()[edge];
+      distance[child] = distance[parent] + branch_lengths[edge];
+      preorder.push_back(child);
+    }
+  }
+  std::vector<double> result;
+  result.reserve(tips.size());
+  for (const btrc::Index tip : tips) {
+    if (tip >= plan.num_nodes() || !child_edges[tip].empty())
+      throw std::invalid_argument("root-to-tip distances require unique tips");
+    result.push_back(distance[tip]);
+  }
+  return result;
+}
+
+inline std::vector<Nucleotide>
+SimulateJukesCantorAlignment(const btrc::Plan &plan,
+                             std::span<const Scalar> branch_lengths,
+                             std::span<const btrc::Index> tips,
+                             std::size_t raw_sites, std::uint64_t seed,
+                             Scalar substitution_rate = Scalar{1}) {
+  if (raw_sites == 0 || tips.empty())
+    throw std::invalid_argument("simulation requires sites and observed tips");
+  if (raw_sites > std::numeric_limits<std::size_t>::max() / tips.size())
+    throw std::length_error("simulated alignment size overflows size_t");
+  if (branch_lengths.size() != plan.num_edges())
+    throw std::invalid_argument("one branch length is required per edge");
+  if (!std::is_sorted(tips.begin(), tips.end()) ||
+      std::adjacent_find(tips.begin(), tips.end()) != tips.end()) {
+    throw std::invalid_argument(
+        "simulated tip indices must be unique and strictly increasing");
+  }
+
+  std::vector<std::vector<std::size_t>> child_edges(plan.num_nodes());
+  for (std::size_t edge = 0; edge < plan.num_edges(); ++edge)
+    child_edges[plan.edge_parents()[edge]].push_back(edge);
+  for (const btrc::Index tip : tips) {
+    if (tip >= plan.num_nodes() || !child_edges[tip].empty())
+      throw std::invalid_argument("an observed simulation node is not a tip");
+  }
+  std::vector<btrc::Index> preorder{plan.root()};
+  std::vector<std::size_t> incoming(plan.num_nodes(), plan.num_edges());
+  for (std::size_t index = 0; index < preorder.size(); ++index) {
+    for (const std::size_t edge : child_edges[preorder[index]]) {
+      const btrc::Index child = plan.edge_children()[edge];
+      incoming[child] = edge;
+      preorder.push_back(child);
+    }
+  }
+  if (preorder.size() != plan.num_nodes())
+    throw std::invalid_argument("JC69 simulation requires a tree");
+
+  constexpr std::array<Nucleotide, 4> kStates{
+      Nucleotide::kA, Nucleotide::kC, Nucleotide::kG, Nucleotide::kT};
+  std::vector<std::array<Scalar, 16>> transitions(plan.num_edges());
+  for (std::size_t edge = 0; edge < plan.num_edges(); ++edge) {
+    transitions[edge] =
+        JukesCantorTransition(branch_lengths[edge], substitution_rate);
+  }
+
+  DeterministicRandom random(seed);
+  std::vector<std::size_t> states(plan.num_nodes());
+  std::vector<Nucleotide> observations(raw_sites * tips.size());
+  for (std::size_t site = 0; site < raw_sites; ++site) {
+    states[plan.root()] = static_cast<std::size_t>(random.Next() & 3U);
+    for (std::size_t index = 1; index < preorder.size(); ++index) {
+      const btrc::Index child = preorder[index];
+      const btrc::Index parent = plan.edge_parents()[incoming[child]];
+      const std::size_t parent_state = states[parent];
+      const auto &transition = transitions[incoming[child]];
+      const double draw = random.Unit();
+      double cumulative = 0.0;
+      std::size_t child_state = 3;
+      for (std::size_t state = 0; state < 3; ++state) {
+        cumulative += transition[parent_state * 4 + state];
+        if (draw < cumulative) {
+          child_state = state;
+          break;
+        }
+      }
+      states[child] = child_state;
+    }
+    for (std::size_t index = 0; index < tips.size(); ++index)
+      observations[site * tips.size() + index] = kStates[states[tips[index]]];
+  }
+  return observations;
 }
 
 inline std::vector<Nucleotide>

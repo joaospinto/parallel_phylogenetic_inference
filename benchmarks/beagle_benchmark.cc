@@ -747,6 +747,15 @@ void RunOne(const BeagleOptions &options, std::size_t replicate) {
                  "workspace, and topology setup; benchmark_mode determines "
                  "which numerical inputs are refreshed\n"
               << "# benchmark_mode=" << options.problem.benchmark_mode << '\n'
+              << "# sequence_generation=" << problem.sequence_generation
+              << '\n'
+              << "# topological_height_edges=" << problem.shape.height
+              << '\n';
+    if (problem.evolutionary_root_to_tip_distance.has_value()) {
+      std::cout << "# evolutionary_root_to_tip_distance="
+                << *problem.evolutionary_root_to_tip_distance << '\n';
+    }
+    std::cout
               << "# timing_beagle_total=host wall time for the input updates "
                  "selected by benchmark_mode, pruning, scaling, root "
                  "integration, and per-pattern likelihood retrieval\n"
@@ -776,6 +785,7 @@ void RunOne(const BeagleOptions &options, std::size_t replicate) {
                  "independently memory-bounded workspace; it is not a mode-matched "
                  "resident implementation\n"
               << "baseline,beagle_resource,precision,benchmark_mode,dataset,topology,"
+                 "sequence_generation,evolutionary_root_to_tip_distance,"
                  "seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,"
                  "site_batch,cpu_reference_site_batch,binary_tree,tree_height,"
                  "sackin_index,colless_index,"
@@ -795,7 +805,10 @@ void RunOne(const BeagleOptions &options, std::size_t replicate) {
               << tree_hmm::kPrecisionName << ','
               << options.problem.benchmark_mode << ','
               << problem.dataset << ','
-              << problem.topology << ',' << problem.base_seed << ','
+              << problem.topology << ',' << problem.sequence_generation << ',';
+    if (problem.evolutionary_root_to_tip_distance.has_value())
+      std::cout << *problem.evolutionary_root_to_tip_distance;
+    std::cout << ',' << problem.base_seed << ','
               << problem.seed << ',' << problem.replicate << ','
               << problem.leaves << ',' << problem.plan.num_nodes() << ','
               << problem.raw_sites << ',' << problem.sites << ',' << site_batch
