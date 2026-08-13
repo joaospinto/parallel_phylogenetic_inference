@@ -37,12 +37,12 @@ public:
                         std::size_t site_batch_capacity = 0, int device = 0);
 
 private:
-  friend std::span<const float> LogLikelihoodsPrepared(AlignmentModelView,
-                                                       Workspace &);
+  friend std::span<const Scalar> LogLikelihoodsPrepared(AlignmentModelView,
+                                                        Workspace &);
   friend AlignmentMaximumView MaximumAPosterioriPrepared(AlignmentModelView,
                                                          Workspace &);
   friend AlignmentPosteriorSampleView
-  PosteriorSamplePrepared(AlignmentModelView, std::span<const float>,
+  PosteriorSamplePrepared(AlignmentModelView, std::span<const Scalar>,
                           Workspace &);
   friend AlignmentPosteriorView PosteriorMarginalsPrepared(AlignmentModelView,
                                                            Workspace &);
@@ -53,8 +53,8 @@ private:
 // rebuilding the contraction plan. The returned values are owned by workspace
 // and remain valid until its next evaluation, reservation, move, or
 // destruction.
-std::span<const float> LogLikelihoodsPrepared(AlignmentModelView model,
-                                              Workspace &workspace);
+std::span<const Scalar> LogLikelihoodsPrepared(AlignmentModelView model,
+                                               Workspace &workspace);
 
 // The recovery functions evaluate the supplied alignment view as one batch;
 // its site count must not exceed the reserved capacity. Use SelectSites to
@@ -64,7 +64,7 @@ AlignmentMaximumView MaximumAPosterioriPrepared(AlignmentModelView model,
                                                 Workspace &workspace);
 AlignmentPosteriorSampleView
 PosteriorSamplePrepared(AlignmentModelView model,
-                        std::span<const float> uniforms, Workspace &workspace);
+                        std::span<const Scalar> uniforms, Workspace &workspace);
 AlignmentPosteriorView PosteriorMarginalsPrepared(AlignmentModelView model,
                                                   Workspace &workspace);
 

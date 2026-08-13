@@ -15,14 +15,14 @@ namespace parallel_phylogenetics {
 struct AlignmentModelView {
   const btrc::Plan &plan;
   std::size_t sites;
-  std::span<const double> branch_lengths;
+  std::span<const Scalar> branch_lengths;
   // Strictly increasing node indices. Phylogenetic alignments ordinarily list
   // the tips, but internal observations are also supported.
   std::span<const btrc::Index> observation_nodes;
   // [site, observation_nodes index].
   std::span<const Nucleotide> observations;
-  std::array<double, 4> root_frequencies{0.25, 0.25, 0.25, 0.25};
-  double substitution_rate = 1.0;
+  std::array<Scalar, 4> root_frequencies{0.25, 0.25, 0.25, 0.25};
+  Scalar substitution_rate = 1.0;
 };
 
 // Returns a view of a contiguous range of alignment sites without copying its
@@ -34,7 +34,7 @@ AlignmentModelView SelectSites(AlignmentModelView model, std::size_t first_site,
 // One maximum-posterior assignment per site. States have shape [site, node]
 // and use the order A=0, C=1, G=2, T=3.
 struct AlignmentMaximumView {
-  std::span<const float> log_weights;
+  std::span<const Scalar> log_weights;
   std::span<const std::uint32_t> states;
 };
 
@@ -48,9 +48,9 @@ struct AlignmentPosteriorSampleView {
 // Ancestral states have shape [site, node, A/C/G/T], and substitutions have
 // shape [site, edge, parent nucleotide, child nucleotide].
 struct AlignmentPosteriorView {
-  std::span<const float> log_likelihoods;
-  std::span<const float> ancestral_states;
-  std::span<const float> substitutions;
+  std::span<const Scalar> log_likelihoods;
+  std::span<const Scalar> ancestral_states;
+  std::span<const Scalar> substitutions;
 };
 
 class AlignmentWorkspace {
@@ -106,14 +106,14 @@ public:
   void Reserve(const btrc::Plan &plan, std::size_t sites);
 
 private:
-  friend std::span<const double> LogLikelihoodsPrepared(AlignmentModelView,
+  friend std::span<const Scalar> LogLikelihoodsPrepared(AlignmentModelView,
                                                         SequentialWorkspace &);
   std::unique_ptr<Impl> impl_;
 };
 
 // Conventional postorder Felsenstein pruning with per-node scaling. This is
 // the allocation-free sequential CPU baseline for accelerator comparisons.
-std::span<const double> LogLikelihoodsPrepared(AlignmentModelView model,
+std::span<const Scalar> LogLikelihoodsPrepared(AlignmentModelView model,
                                                SequentialWorkspace &workspace);
 
 } // namespace parallel_phylogenetics

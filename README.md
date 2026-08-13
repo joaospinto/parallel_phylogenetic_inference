@@ -32,9 +32,10 @@ caller-provided accelerator input storage. CUDA uses pinned host buffers and
 Metal uses shared buffers, so the same generic tree-HMM call neither makes a
 second full-batch staging copy nor materializes dense node factors on the host.
 
-The accelerator kernels currently use FP32, while the conventional CPU
-baseline uses FP64. Every benchmark reports the maximum absolute discrepancy
-between their per-site log likelihoods.
+CPU and CUDA use the same compile-time `Scalar`: FP64 is the default, and FP32
+is a separate pure-precision build. Metal is FP32-only. Benchmark rows report
+their precision and compare the CPU and accelerator implementations in that
+same precision.
 
 Applications do not need to prepare generic tree-HMM factors themselves. For
 example, a prepared CUDA evaluation is:
@@ -44,7 +45,7 @@ example, a prepared CUDA evaluation is:
 
 parallel_phylogenetics::cuda::Workspace workspace;
 workspace.Reserve(model, 4096);
-std::span<const float> log_likelihoods =
+std::span<const parallel_phylogenetics::Scalar> log_likelihoods =
     parallel_phylogenetics::cuda::LogLikelihoodsPrepared(model, workspace);
 ```
 
@@ -81,20 +82,21 @@ Keep this repository beside `bidirectional_tree_rake_compress` and
 `parallel_tree_hmm`. Bazel resolves both through local module overrides.
 
 ```sh
-bazel test //...
+bazel test //... --config=fp64
 ```
 
 On an Apple system with Metal:
 
 ```sh
-bazel run //:metal_benchmark -- \
+bazel run //:metal_benchmark --config=fp32 -- \
   --topology balanced --leaves 4096 --sites 1024 --repeats 5
 ```
 
 On a CUDA system, replace `sm_75` with the device's compute capability:
 
 ```sh
-bazel run --config=cuda --cuda_archs=sm_75 //:cuda_benchmark -- \
+bazel run --config=fp64 --config=cuda --cuda_archs=sm_75 \
+  //:cuda_benchmark -- \
   --topology balanced --leaves 4096 --sites 1024 --repeats 5
 ```
 
@@ -102,14 +104,14 @@ Both benchmark binaries accept empirical FASTA or relaxed sequential PHYLIP
 alignments:
 
 ```sh
-bazel run //:metal_benchmark -- \
+bazel run //:metal_benchmark --config=fp32 -- \
   --newick family.nwk --fasta family.fasta --repeats 5
 ```
 
 Long alignments can be evaluated in a capacity-bounded prepared workspace:
 
 ```sh
-bazel run //:metal_benchmark -- \
+bazel run //:metal_benchmark --config=fp32 -- \
   --newick tree.nwk --phylip alignment.phy --site-batch 1024 --repeats 5
 ```
 

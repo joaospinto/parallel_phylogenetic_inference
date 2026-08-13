@@ -13,6 +13,9 @@ build:macos --cxxopt=-Werror
 build:macos --cxxopt=-O3
 build:macos --macos_minimum_os=11.0
 
+build:fp64 --@parallel_tree_hmm//:precision=fp64
+build:fp32 --@parallel_tree_hmm//:precision=fp32
+
 build --@rules_cuda//cuda:enable=false
 build:cuda --@rules_cuda//cuda:enable=true
 build:cuda --@rules_cuda//cuda:compiler=nvcc

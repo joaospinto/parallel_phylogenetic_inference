@@ -25,7 +25,7 @@ void TestAccelerator(Workspace &workspace, Reserve &&reserve,
                      Evaluate &&evaluate) {
   const btrc::Plan plan =
       btrc::MakePlan(std::vector<std::int64_t>{-1, 0, 0, 1, 1, 3, 2});
-  const std::vector<double> lengths{0.1, 0.3, 0.2, 0.4, 0.15, 0.5};
+  const std::vector<Scalar> lengths{0.1, 0.3, 0.2, 0.4, 0.15, 0.5};
   const std::vector<btrc::Index> observation_nodes{4, 5, 6};
   constexpr std::size_t kSites = 5;
   using N = Nucleotide;
@@ -33,24 +33,25 @@ void TestAccelerator(Workspace &workspace, Reserve &&reserve,
       N::kR, N::kG, N::kT, N::kC, N::kC, N::kA, N::kUnknown, N::kY,
       N::kB, N::kV, N::kW, N::kD, N::kH, N::kM, N::kS,
   };
-  const std::array<double, 4> frequencies{0.3, 0.2, 0.2, 0.3};
+  const std::array<Scalar, 4> frequencies{0.3, 0.2, 0.2, 0.3};
   const AlignmentModelView model{
       plan, kSites, lengths, observation_nodes, observations, frequencies, 1.0};
 
   SequentialWorkspace sequential_workspace;
   sequential_workspace.Reserve(plan, kSites);
-  const std::span<const double> expected =
+  const std::span<const Scalar> expected =
       LogLikelihoodsPrepared(model, sequential_workspace);
 
   reserve(model, 2);
   for (int repeat = 0; repeat < 2; ++repeat) {
-    const std::span<const float> actual = evaluate(model, workspace);
+    const std::span<const Scalar> actual = evaluate(model, workspace);
     Check(actual.size() == kSites,
           "phylogenetic accelerator returned a wrong site count");
     for (std::size_t site = 0; site < kSites; ++site) {
       const double error =
           std::abs(static_cast<double>(actual[site]) - expected[site]);
-      Check(error <= 2e-5 * std::max(1.0, std::abs(expected[site])),
+      Check(error <= 2e-5 * std::max(1.0, std::abs(static_cast<double>(
+                                              expected[site]))),
             "phylogenetic accelerator likelihood is inaccurate");
     }
   }
@@ -65,7 +66,7 @@ void TestRecoveryAccelerator(
     ReserveMarginals &&reserve_marginals, Marginals &&marginals) {
   const btrc::Plan plan =
       btrc::MakePlan(std::vector<std::int64_t>{-1, 0, 0, 1, 1, 3, 2});
-  const std::vector<double> lengths{0.1, 0.3, 0.2, 0.4, 0.15, 0.5};
+  const std::vector<Scalar> lengths{0.1, 0.3, 0.2, 0.4, 0.15, 0.5};
   const std::vector<btrc::Index> observation_nodes{4, 5, 6};
   constexpr std::size_t kSites = 5;
   using N = Nucleotide;
@@ -73,7 +74,7 @@ void TestRecoveryAccelerator(
       N::kR, N::kG, N::kT, N::kC, N::kC, N::kA, N::kUnknown, N::kY,
       N::kB, N::kV, N::kW, N::kD, N::kH, N::kM, N::kS,
   };
-  const std::array<double, 4> frequencies{0.3, 0.2, 0.2, 0.3};
+  const std::array<Scalar, 4> frequencies{0.3, 0.2, 0.2, 0.3};
   const AlignmentModelView full{
       plan, kSites, lengths, observation_nodes, observations, frequencies, 1.0};
   const AlignmentModelView model = SelectSites(full, 1, 2);
@@ -92,10 +93,10 @@ void TestRecoveryAccelerator(
         "phylogenetic accelerator returned a wrong MAP state shape");
   for (std::size_t site = 0; site < model.sites; ++site) {
     const std::size_t node_values = plan.num_nodes() * 4;
-    const std::vector<double> nodes(
+    const std::vector<Scalar> nodes(
         factors.node_potentials.begin() + site * node_values,
         factors.node_potentials.begin() + (site + 1) * node_values);
-    const std::vector<double> edges(factors.edge_potentials.begin(),
+    const std::vector<Scalar> edges(factors.edge_potentials.begin(),
                                     factors.edge_potentials.end());
     const tree_hmm::MaximumAssignmentView expected =
         tree_hmm::MaximumAPosterioriPrepared({plan, 4, nodes, edges},
@@ -110,7 +111,7 @@ void TestRecoveryAccelerator(
     }
   }
 
-  std::vector<float> uniforms(model.sites * plan.num_nodes());
+  std::vector<Scalar> uniforms(model.sites * plan.num_nodes());
   for (std::size_t index = 0; index < uniforms.size(); ++index)
     uniforms[index] = 0.07f + 0.11f * static_cast<float>(index % 8);
   reserve_sampling(full, 2);
@@ -120,12 +121,12 @@ void TestRecoveryAccelerator(
         "phylogenetic accelerator returned a wrong sample shape");
   for (std::size_t site = 0; site < model.sites; ++site) {
     const std::size_t node_values = plan.num_nodes() * 4;
-    const std::vector<double> nodes(
+    const std::vector<Scalar> nodes(
         factors.node_potentials.begin() + site * node_values,
         factors.node_potentials.begin() + (site + 1) * node_values);
-    const std::vector<double> edges(factors.edge_potentials.begin(),
+    const std::vector<Scalar> edges(factors.edge_potentials.begin(),
                                     factors.edge_potentials.end());
-    const std::vector<double> site_uniforms(
+    const std::vector<Scalar> site_uniforms(
         uniforms.begin() + site * plan.num_nodes(),
         uniforms.begin() + (site + 1) * plan.num_nodes());
     const std::span<const std::size_t> expected =
@@ -150,10 +151,10 @@ void TestRecoveryAccelerator(
   Check(actual_marginals.substitutions.size() == model.sites * edges_per_site,
         "phylogenetic accelerator returned a wrong edge-marginal shape");
   for (std::size_t site = 0; site < model.sites; ++site) {
-    const std::vector<double> nodes(
+    const std::vector<Scalar> nodes(
         factors.node_potentials.begin() + site * nodes_per_site,
         factors.node_potentials.begin() + (site + 1) * nodes_per_site);
-    const std::vector<double> edges(factors.edge_potentials.begin(),
+    const std::vector<Scalar> edges(factors.edge_potentials.begin(),
                                     factors.edge_potentials.end());
     const tree_hmm::MarginalView expected =
         tree_hmm::PosteriorMarginalsPrepared({plan, 4, nodes, edges},

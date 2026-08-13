@@ -14,7 +14,7 @@ if [[ ! "${conditioning_ms}" =~ ^[0-9]+$ ]]; then
 fi
 
 cd "${repo_dir}"
-bazel build //:metal_benchmark
+bazel build //:metal_benchmark --config=fp32
 echo "=== Apple device ==="
 system_profiler SPHardwareDataType SPDisplaysDataType
 echo "=== Metal scaling benchmark ==="

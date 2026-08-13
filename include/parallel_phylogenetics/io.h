@@ -15,7 +15,7 @@ namespace parallel_phylogenetics {
 struct Phylogeny {
   btrc::Plan plan;
   // Plan edge order.
-  std::vector<double> branch_lengths;
+  std::vector<Scalar> branch_lengths;
   // Plan node order. Internal and root labels may be empty.
   std::vector<std::string> labels;
 };

@@ -41,7 +41,7 @@ public:
       Fail("internal parser error: root is not the first node");
 
     btrc::Plan plan = btrc::MakePlan(parents_, root);
-    std::vector<double> edge_lengths(plan.num_edges());
+    std::vector<Scalar> edge_lengths(plan.num_edges());
     for (std::size_t edge = 0; edge < plan.num_edges(); ++edge)
       edge_lengths[edge] = lengths_[plan.edge_children()[edge]];
     return {std::move(plan), std::move(edge_lengths), std::move(labels_)};
@@ -119,7 +119,7 @@ private:
     return std::string(text_.substr(begin, position_ - begin));
   }
 
-  double ParseLength() {
+  Scalar ParseLength() {
     SkipIgnored();
     const std::size_t begin = position_;
     while (position_ < text_.size()) {
@@ -139,7 +139,9 @@ private:
         errno == ERANGE || !std::isfinite(value) || value < 0.0) {
       Fail("branch lengths must be finite and nonnegative");
     }
-    return value;
+    if (value > static_cast<double>(std::numeric_limits<Scalar>::max()))
+      Fail("branch length exceeds the configured scalar range");
+    return static_cast<Scalar>(value);
   }
 
   void SkipIgnored() {
@@ -185,7 +187,7 @@ private:
   std::size_t position_ = 0;
   std::vector<std::int64_t> parents_;
   std::vector<std::string> labels_;
-  std::vector<double> lengths_;
+  std::vector<Scalar> lengths_;
 };
 
 std::string RecordName(std::string_view header) {

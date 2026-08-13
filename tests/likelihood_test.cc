@@ -11,6 +11,8 @@
 #include <cstdlib>
 #include <new>
 #include <stdexcept>
+#include <string>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -33,20 +35,27 @@ void operator delete(void *pointer, std::size_t) noexcept {
 
 namespace {
 
-bool Near(double left, double right, double tolerance = 1e-11) {
+constexpr double kTolerance =
+    std::is_same_v<parallel_phylogenetics::Scalar, float> ? 2e-5 : 1e-11;
+
+bool Near(double left, double right, double tolerance = kTolerance) {
   return std::abs(left - right) <=
          tolerance * std::max({1.0, std::abs(left), std::abs(right)});
 }
 
-void Check(bool condition) {
+void CheckImpl(bool condition, int line) {
   if (!condition)
-    throw std::runtime_error("phylogenetic likelihood test failed");
+    throw std::runtime_error("phylogenetic likelihood test failed at line " +
+                             std::to_string(line));
 }
 
+#define Check(condition) CheckImpl((condition), __LINE__)
+
 double FelsensteinReference(
-    const btrc::Plan &plan, const std::vector<double> &branch_lengths,
+    const btrc::Plan &plan,
+    const std::vector<parallel_phylogenetics::Scalar> &branch_lengths,
     const std::vector<parallel_phylogenetics::Nucleotide> &observations,
-    const std::array<double, 4> &root_frequencies) {
+    const std::array<parallel_phylogenetics::Scalar, 4> &root_frequencies) {
   std::vector<std::vector<std::size_t>> children(plan.num_nodes());
   std::vector<std::size_t> incoming(plan.num_nodes(), plan.num_edges());
   for (std::size_t edge = 0; edge < plan.num_edges(); ++edge) {
@@ -61,7 +70,8 @@ double FelsensteinReference(
     order.push_back(node);
     stack.insert(stack.end(), children[node].begin(), children[node].end());
   }
-  std::vector<double> partials(plan.num_nodes() * 4, 1.0);
+  std::vector<parallel_phylogenetics::Scalar> partials(plan.num_nodes() * 4,
+                                                       1.0);
   for (std::size_t node = 0; node < plan.num_nodes(); ++node) {
     for (std::size_t state = 0; state < 4; ++state) {
       if (!parallel_phylogenetics::AllowsState(observations[node], state))
@@ -94,12 +104,14 @@ double FelsensteinReference(
 int main() {
   const btrc::Plan plan =
       btrc::MakePlan(std::vector<std::int64_t>{-1, 0, 0, 1, 1, 3, 2});
-  const std::vector<double> lengths{0.1, 0.3, 0.2, 0.4, 0.15, 0.5};
+  const std::vector<parallel_phylogenetics::Scalar> lengths{0.1, 0.3,  0.2,
+                                                            0.4, 0.15, 0.5};
   using N = parallel_phylogenetics::Nucleotide;
   const std::vector<N> observations{
       N::kUnknown, N::kUnknown, N::kUnknown, N::kUnknown, N::kA, N::kG, N::kT,
   };
-  const std::array<double, 4> frequencies{0.3, 0.2, 0.2, 0.3};
+  const std::array<parallel_phylogenetics::Scalar, 4> frequencies{0.3, 0.2, 0.2,
+                                                                  0.3};
   const parallel_phylogenetics::SiteModelView model{plan, lengths, observations,
                                                     frequencies, 1.0};
   const double expected =
@@ -129,8 +141,10 @@ int main() {
       alignment_workspace);
   Check(prepared.batch == 2);
   Check(prepared.states == 4);
-  std::vector<float> direct_nodes(prepared.node_potentials.size());
-  std::vector<float> direct_edges(prepared.edge_potentials.size());
+  std::vector<parallel_phylogenetics::Scalar> direct_nodes(
+      prepared.node_potentials.size());
+  std::vector<parallel_phylogenetics::Scalar> direct_edges(
+      prepared.edge_potentials.size());
   tree_hmm::MutableBatchedModelView direct_destination{plan, 4, 2, direct_nodes,
                                                        direct_edges};
   const tree_hmm::BatchedModelView direct = parallel_phylogenetics::Prepare(
@@ -145,9 +159,10 @@ int main() {
                    direct.edge_potentials.begin()));
   std::vector<std::uint8_t> categorical_observations(
       alignment_observations.size());
-  std::vector<float> categorical_root(4);
-  std::vector<float> categorical_emissions(16 * 4);
-  std::vector<float> categorical_edges(prepared.edge_potentials.size());
+  std::vector<parallel_phylogenetics::Scalar> categorical_root(4);
+  std::vector<parallel_phylogenetics::Scalar> categorical_emissions(16 * 4);
+  std::vector<parallel_phylogenetics::Scalar> categorical_edges(
+      prepared.edge_potentials.size());
   tree_hmm::MutableBatchedCategoricalModelView categorical_destination{
       plan,
       4,
@@ -164,7 +179,8 @@ int main() {
                                        1.0},
                                       categorical_destination);
   for (std::size_t site = 0; site < 2; ++site) {
-    std::vector<float> reconstructed(plan.num_nodes() * 4, 1.0f);
+    std::vector<parallel_phylogenetics::Scalar> reconstructed(
+        plan.num_nodes() * 4, 1.0f);
     std::copy(categorical.root_potential.begin(),
               categorical.root_potential.end(),
               reconstructed.begin() + plan.root() * 4);
@@ -187,18 +203,18 @@ int main() {
                    prepared.edge_potentials.begin()));
   parallel_phylogenetics::SequentialWorkspace sequential_workspace;
   sequential_workspace.Reserve(plan, 2);
-  const std::span<const double> sequential =
+  const std::span<const parallel_phylogenetics::Scalar> sequential =
       parallel_phylogenetics::LogLikelihoodsPrepared(
           {plan, 2, lengths, observation_nodes, alignment_observations,
            frequencies, 1.0},
           sequential_workspace);
   for (std::size_t site = 0; site < 2; ++site) {
     const std::size_t node_values = plan.num_nodes() * 4;
-    std::vector<double> site_nodes(
+    std::vector<parallel_phylogenetics::Scalar> site_nodes(
         prepared.node_potentials.begin() + site * node_values,
         prepared.node_potentials.begin() + (site + 1) * node_values);
-    std::vector<double> site_edges(prepared.edge_potentials.begin(),
-                                   prepared.edge_potentials.end());
+    std::vector<parallel_phylogenetics::Scalar> site_edges(
+        prepared.edge_potentials.begin(), prepared.edge_potentials.end());
     const double prepared_log_likelihood =
         tree_hmm::LogPartitionFunction({plan, 4, site_nodes, site_edges});
     std::vector<N> site_observations(plan.num_nodes(), N::kUnknown);
@@ -277,17 +293,18 @@ int main() {
                                               ambiguity_alignment);
   parallel_phylogenetics::SequentialWorkspace ambiguity_workspace;
   ambiguity_workspace.Reserve(ambiguity_tree.plan, ambiguity_encoded.sites);
-  const std::span<const double> ambiguity_likelihoods =
+  const std::span<const parallel_phylogenetics::Scalar> ambiguity_likelihoods =
       parallel_phylogenetics::LogLikelihoodsPrepared(
           {ambiguity_tree.plan, ambiguity_encoded.sites,
            ambiguity_tree.branch_lengths, ambiguity_encoded.observation_nodes,
            ambiguity_encoded.observations},
           ambiguity_workspace);
   // Independent per-site values from RAxML-NG under the same JC69 model.
-  const std::array<double, 12> expected_ambiguity_likelihoods{
-      -5.040094590240, -6.981834284265, -4.934072093490, -6.251378523747,
-      -6.405406411110, -4.896548084956, -6.363574230408, -4.906040938581,
-      -5.932518541162, -4.804068470622, -4.779412771342, -4.812719161660};
+  const std::array<parallel_phylogenetics::Scalar, 12>
+      expected_ambiguity_likelihoods{
+          -5.040094590240, -6.981834284265, -4.934072093490, -6.251378523747,
+          -6.405406411110, -4.896548084956, -6.363574230408, -4.906040938581,
+          -5.932518541162, -4.804068470622, -4.779412771342, -4.812719161660};
   Check(std::equal(ambiguity_likelihoods.begin(), ambiguity_likelihoods.end(),
                    expected_ambiguity_likelihoods.begin(),
                    [](double actual, double expected_value) {

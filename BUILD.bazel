@@ -4,8 +4,9 @@ load("@rules_cc//cc:cc_test.bzl", "cc_test")
 load("@rules_cuda//cuda:defs.bzl", "requires_cuda")
 
 config_setting(
-    name = "macos",
+    name = "macos_fp32",
     constraint_values = ["@platforms//os:osx"],
+    flag_values = {"@parallel_tree_hmm//:precision": "fp32"},
 )
 
 cc_library(
@@ -76,7 +77,7 @@ cc_library(
     hdrs = ["include/parallel_phylogenetics/metal.h"],
     includes = ["include"],
     target_compatible_with = select({
-        ":macos": [],
+        ":macos_fp32": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     visibility = ["//visibility:public"],
@@ -93,7 +94,7 @@ cc_test(
         "tests/metal_test.cc",
     ],
     target_compatible_with = select({
-        ":macos": [],
+        ":macos_fp32": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
@@ -109,7 +110,7 @@ cc_binary(
         "benchmarks/metal_benchmark.cc",
     ],
     target_compatible_with = select({
-        ":macos": [],
+        ":macos_fp32": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [

@@ -24,7 +24,7 @@ template <class BackendWorkspace> struct WorkspaceStorage {
   std::size_t batch_capacity = 0;
   PreparedOperation operation = PreparedOperation::kLikelihood;
   std::vector<btrc::Index> observation_nodes;
-  std::vector<float> output;
+  std::vector<Scalar> output;
   BackendWorkspace tree_hmm;
 };
 
@@ -120,10 +120,10 @@ BatchPrefix(tree_hmm::MutableBatchedCategoricalModelView destination,
 }
 
 template <class Destination, class Evaluate>
-std::span<const float>
+std::span<const Scalar>
 LogLikelihoodsPrepared(AlignmentModelView model, std::size_t batch_capacity,
                        Destination destination, Evaluate &&evaluate,
-                       std::span<float> output) {
+                       std::span<Scalar> output) {
   if (batch_capacity == 0 || destination.batch != batch_capacity ||
       output.size() != model.sites) {
     throw std::invalid_argument(
@@ -159,14 +159,14 @@ AlignmentMaximumView MaximumAPosterioriPrepared(AlignmentModelView model,
 
 template <class Destination, class Uniforms, class Evaluate>
 AlignmentPosteriorSampleView PosteriorSamplePrepared(
-    AlignmentModelView model, std::span<const float> variates,
+    AlignmentModelView model, std::span<const Scalar> variates,
     Destination destination, Uniforms &&uniforms, Evaluate &&evaluate) {
   const std::size_t expected_uniforms = model.sites * model.plan.num_nodes();
   if (variates.size() != expected_uniforms)
     throw std::invalid_argument(
         "posterior sampling requires one uniform variate per site and node");
   const auto factors = Prepare(model, BatchPrefix(destination, model.sites));
-  std::span<float> staged_uniforms = uniforms(model.sites);
+  std::span<Scalar> staged_uniforms = uniforms(model.sites);
   std::copy(variates.begin(), variates.end(), staged_uniforms.begin());
   const tree_hmm::BatchedPosteriorSampleView result =
       evaluate(factors, staged_uniforms);

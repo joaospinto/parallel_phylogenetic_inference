@@ -12,8 +12,8 @@ namespace parallel_phylogenetics {
 namespace {
 
 struct Potentials {
-  std::vector<double> nodes;
-  std::vector<double> edges;
+  std::vector<Scalar> nodes;
+  std::vector<Scalar> edges;
 };
 
 Potentials BuildPotentials(SiteModelView model) {
@@ -26,11 +26,14 @@ Potentials BuildPotentials(SiteModelView model) {
     throw std::invalid_argument(
         "the substitution rate must be finite and nonnegative");
   }
-  const double frequency_sum = std::accumulate(
-      model.root_frequencies.begin(), model.root_frequencies.end(), 0.0);
-  if (!std::isfinite(frequency_sum) || std::abs(frequency_sum - 1.0) > 1e-12 ||
+  const Scalar frequency_sum = std::accumulate(
+      model.root_frequencies.begin(), model.root_frequencies.end(), Scalar{0});
+  const Scalar probability_tolerance =
+      Scalar{16} * std::numeric_limits<Scalar>::epsilon();
+  if (!std::isfinite(frequency_sum) ||
+      std::abs(frequency_sum - Scalar{1}) > probability_tolerance ||
       std::any_of(model.root_frequencies.begin(), model.root_frequencies.end(),
-                  [](double value) { return value < 0.0; })) {
+                  [](Scalar value) { return value < 0.0; })) {
     throw std::invalid_argument(
         "root frequencies must be nonnegative and sum to one");
   }
@@ -46,7 +49,7 @@ Potentials BuildPotentials(SiteModelView model) {
     const std::uint8_t mask = static_cast<std::uint8_t>(observation);
     if (mask == 0 || mask > static_cast<std::uint8_t>(Nucleotide::kUnknown))
       throw std::invalid_argument("invalid nucleotide observation");
-    double *potential = result.nodes.data() + node * 4;
+    Scalar *potential = result.nodes.data() + node * 4;
     for (int candidate = 0; candidate < 4; ++candidate) {
       if (!AllowsState(observation, candidate))
         potential[candidate] = 0.0;
@@ -54,7 +57,7 @@ Potentials BuildPotentials(SiteModelView model) {
   }
 
   result.edges.reserve(model.plan.num_edges() * 16);
-  for (const double length : model.branch_lengths) {
+  for (const Scalar length : model.branch_lengths) {
     const auto transition =
         JukesCantorTransition(length, model.substitution_rate);
     result.edges.insert(result.edges.end(), transition.begin(),
@@ -65,17 +68,17 @@ Potentials BuildPotentials(SiteModelView model) {
 
 } // namespace
 
-std::array<double, 16> JukesCantorTransition(double branch_length,
-                                             double rate) {
+std::array<Scalar, 16> JukesCantorTransition(Scalar branch_length,
+                                             Scalar rate) {
   if (!(branch_length >= 0.0) || !std::isfinite(branch_length) ||
       !(rate >= 0.0) || !std::isfinite(rate)) {
     throw std::invalid_argument(
         "Jukes-Cantor branch length and rate must be finite and nonnegative");
   }
-  const double decay = std::exp(-4.0 * rate * branch_length / 3.0);
-  const double same = 0.25 + 0.75 * decay;
-  const double different = 0.25 - 0.25 * decay;
-  std::array<double, 16> result{};
+  const Scalar decay = std::exp(-Scalar{4} * rate * branch_length / Scalar{3});
+  const Scalar same = Scalar{0.25} + Scalar{0.75} * decay;
+  const Scalar different = Scalar{0.25} - Scalar{0.25} * decay;
+  std::array<Scalar, 16> result{};
   for (std::size_t parent = 0; parent < 4; ++parent) {
     for (std::size_t child = 0; child < 4; ++child)
       result[parent * 4 + child] = parent == child ? same : different;
@@ -83,13 +86,13 @@ std::array<double, 16> JukesCantorTransition(double branch_length,
   return result;
 }
 
-double SiteLikelihood(SiteModelView model) {
+Scalar SiteLikelihood(SiteModelView model) {
   const Potentials potentials = BuildPotentials(model);
   return tree_hmm::PartitionFunction(
       {model.plan, 4, potentials.nodes, potentials.edges});
 }
 
-double SiteLogLikelihood(SiteModelView model) {
+Scalar SiteLogLikelihood(SiteModelView model) {
   const Potentials potentials = BuildPotentials(model);
   return tree_hmm::LogPartitionFunction(
       {model.plan, 4, potentials.nodes, potentials.edges});

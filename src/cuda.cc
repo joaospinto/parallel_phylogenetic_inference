@@ -66,8 +66,8 @@ void Workspace::ReserveMarginals(AlignmentModelView model,
       });
 }
 
-std::span<const float> LogLikelihoodsPrepared(AlignmentModelView model,
-                                              Workspace &workspace) {
+std::span<const Scalar> LogLikelihoodsPrepared(AlignmentModelView model,
+                                               Workspace &workspace) {
   Workspace::Impl &storage = *workspace.impl_;
   if (storage.sites != model.sites) {
     throw std::invalid_argument(
@@ -99,7 +99,8 @@ AlignmentMaximumView MaximumAPosterioriPrepared(AlignmentModelView model,
 
 AlignmentPosteriorSampleView
 PosteriorSamplePrepared(AlignmentModelView model,
-                        std::span<const float> uniforms, Workspace &workspace) {
+                        std::span<const Scalar> uniforms,
+                        Workspace &workspace) {
   Workspace::Impl &storage = *workspace.impl_;
   internal::ValidatePrepared(model, storage,
                              internal::PreparedOperation::kSampling);
@@ -107,7 +108,7 @@ PosteriorSamplePrepared(AlignmentModelView model,
       model, uniforms, storage.tree_hmm.CategoricalInputs(),
       [&](std::size_t batch) { return storage.tree_hmm.Uniforms(batch); },
       [&](tree_hmm::BatchedCategoricalModelView factors,
-          std::span<const float> staged_uniforms) {
+          std::span<const Scalar> staged_uniforms) {
         return tree_hmm::cuda::PosteriorSamplePrepared(factors, staged_uniforms,
                                                        storage.tree_hmm);
       });

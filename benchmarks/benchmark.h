@@ -39,7 +39,7 @@ struct Options {
 
 struct Problem {
   btrc::Plan plan;
-  std::vector<double> branch_lengths;
+  std::vector<Scalar> branch_lengths;
   std::vector<btrc::Index> observation_nodes;
   std::vector<Nucleotide> observations;
   std::string dataset;
@@ -167,9 +167,10 @@ inline Problem MakeProblem(const Options &options) {
     }
   }
   btrc::Plan plan = btrc::MakePlan(parents);
-  std::vector<double> lengths(plan.num_edges());
+  std::vector<Scalar> lengths(plan.num_edges());
   for (std::size_t edge = 0; edge < lengths.size(); ++edge)
-    lengths[edge] = 0.02 + 0.001 * static_cast<double>(edge % 29);
+    lengths[edge] =
+        Scalar{0.02} + Scalar{0.001} * static_cast<Scalar>(edge % 29);
 
   const std::size_t first_leaf = leaves - 1;
   std::vector<btrc::Index> observation_nodes(leaves);
@@ -207,8 +208,8 @@ inline double Milliseconds(Clock::time_point begin, Clock::time_point end) {
 }
 
 struct BenchmarkResult {
-  std::vector<double> cpu_values;
-  std::vector<float> accelerator_values;
+  std::vector<Scalar> cpu_values;
+  std::vector<Scalar> accelerator_values;
   tree_hmm::AcceleratorTimings accelerator_timings;
   double cpu_ms = 0.0;
   double prepare_ms = 0.0;
@@ -265,7 +266,7 @@ BenchmarkResult RunInterleaved(AlignmentModelView model, int repeats,
   download_times.reserve(repeats);
   total_times.reserve(repeats);
 
-  std::span<const double> cpu_values;
+  std::span<const Scalar> cpu_values;
   tree_hmm::PartitionView accelerator_result;
   const auto run_cpu = [&] {
     const Clock::time_point begin = Clock::now();
@@ -310,9 +311,9 @@ BenchmarkResult RunInterleaved(AlignmentModelView model, int repeats,
   accelerator_result.timings.upload_ms = Median(upload_times);
   accelerator_result.timings.kernel_ms = Median(kernel_times);
   accelerator_result.timings.download_ms = Median(download_times);
-  return {std::vector<double>(cpu_values.begin(), cpu_values.end()),
-          std::vector<float>(accelerator_result.values.begin(),
-                             accelerator_result.values.end()),
+  return {std::vector<Scalar>(cpu_values.begin(), cpu_values.end()),
+          std::vector<Scalar>(accelerator_result.values.begin(),
+                              accelerator_result.values.end()),
           accelerator_result.timings,
           Median(cpu_times),
           Median(prepare_times),
@@ -376,11 +377,10 @@ BatchPrefix(tree_hmm::MutableBatchedCategoricalModelView destination,
 // concatenation is deliberately outside the measured intervals because both
 // backends have already materialized those values.
 template <typename Destination, typename Accelerator>
-BenchmarkResult RunChunkedInterleaved(AlignmentModelView model, int repeats,
-                                      std::size_t conditioning_ms,
-                                      std::size_t site_batch,
-                                      Destination full_destination,
-                                      Accelerator &&accelerator) {
+BenchmarkResult
+RunChunkedInterleaved(AlignmentModelView model, int repeats,
+                      std::size_t conditioning_ms, std::size_t site_batch,
+                      Destination full_destination, Accelerator &&accelerator) {
   if (site_batch == 0 || site_batch >= model.sites)
     throw std::invalid_argument(
         "chunked inference requires a batch smaller than the alignment");
@@ -402,8 +402,8 @@ BenchmarkResult RunChunkedInterleaved(AlignmentModelView model, int repeats,
         accelerator(Prepare(tail, BatchPrefix(full_destination, remainder))));
   }
 
-  std::vector<double> cpu_values(model.sites);
-  std::vector<float> accelerator_values(model.sites);
+  std::vector<Scalar> cpu_values(model.sites);
+  std::vector<Scalar> accelerator_values(model.sites);
   std::vector<double> cpu_times;
   std::vector<double> prepare_times;
   std::vector<double> wall_times;
@@ -428,7 +428,7 @@ BenchmarkResult RunChunkedInterleaved(AlignmentModelView model, int repeats,
       SequentialWorkspace &workspace =
           count == site_batch ? full_cpu : tail_cpu;
       const Clock::time_point begin = Clock::now();
-      const std::span<const double> values =
+      const std::span<const Scalar> values =
           LogLikelihoodsPrepared(chunk, workspace);
       elapsed += Milliseconds(begin, Clock::now());
       std::copy(values.begin(), values.end(), cpu_values.begin() + first_site);
@@ -496,8 +496,8 @@ BenchmarkResult RunChunkedInterleaved(AlignmentModelView model, int repeats,
           Median(total_times)};
 }
 
-inline double MaxAbsoluteError(std::span<const double> expected,
-                               std::span<const float> actual) {
+inline double MaxAbsoluteError(std::span<const Scalar> expected,
+                               std::span<const Scalar> actual) {
   if (expected.size() != actual.size())
     throw std::invalid_argument("benchmark output shapes do not match");
   double result = 0.0;
@@ -508,15 +508,17 @@ inline double MaxAbsoluteError(std::span<const double> expected,
   return result;
 }
 
-inline double MaxRelativeError(std::span<const double> expected,
-                               std::span<const float> actual) {
+inline double MaxRelativeError(std::span<const Scalar> expected,
+                               std::span<const Scalar> actual) {
   if (expected.size() != actual.size())
     throw std::invalid_argument("benchmark output shapes do not match");
   double result = 0.0;
   for (std::size_t index = 0; index < expected.size(); ++index) {
     const double error =
         std::abs(expected[index] - static_cast<double>(actual[index]));
-    result = std::max(result, error / std::max(1.0, std::abs(expected[index])));
+    result = std::max(
+        result,
+        error / std::max(1.0, std::abs(static_cast<double>(expected[index]))));
   }
   return result;
 }
@@ -524,19 +526,21 @@ inline double MaxRelativeError(std::span<const double> expected,
 inline void PrintHeader(const char *backend, const std::string &device,
                         const Options &options, const Problem &problem) {
   const btrc::PlanStatistics statistics = btrc::Statistics(problem.plan);
-  std::cout << "# backend=" << backend << '\n'
-            << "# device=" << device << '\n'
-            << "# dataset=" << problem.dataset << '\n'
-            << "# topology=" << problem.topology << "-bifurcating-jc69\n"
-            << "# prepared calls exclude workspace allocation and warmup\n"
-            << "# conditioning_ms=" << options.conditioning_ms << '\n'
-            << "# CPU and accelerator execution order alternates by repeat\n"
-            << "backend,dataset,topology,leaves,nodes,sites,site_batch,"
-               "primitive_levels,repeats,conditioning_ms,"
-               "cpu_ms,prepare_ms,accelerator_wall_ms,upload_ms,kernel_ms,"
-               "download_ms,total_accelerator_ms,wall_speedup,"
-               "cpu_log_likelihood,accelerator_log_likelihood,max_abs_error,"
-               "max_relative_error\n";
+  std::cout
+      << "# backend=" << backend << '\n'
+      << "# precision=" << tree_hmm::kPrecisionName << '\n'
+      << "# device=" << device << '\n'
+      << "# dataset=" << problem.dataset << '\n'
+      << "# topology=" << problem.topology << "-bifurcating-jc69\n"
+      << "# prepared calls exclude workspace allocation and warmup\n"
+      << "# conditioning_ms=" << options.conditioning_ms << '\n'
+      << "# CPU and accelerator execution order alternates by repeat\n"
+      << "backend,precision,dataset,topology,leaves,nodes,sites,site_batch,"
+         "primitive_levels,repeats,conditioning_ms,"
+         "cpu_ms,prepare_ms,accelerator_wall_ms,upload_ms,kernel_ms,"
+         "download_ms,total_accelerator_ms,wall_speedup,"
+         "cpu_log_likelihood,accelerator_log_likelihood,max_abs_error,"
+         "max_relative_error\n";
   static_cast<void>(statistics);
 }
 
@@ -544,11 +548,12 @@ inline void PrintRow(const char *backend, const Options &options,
                      const Problem &problem, double cpu_ms, double prepare_ms,
                      const tree_hmm::AcceleratorTimings &accelerator,
                      double total_accelerator_ms,
-                     std::span<const double> cpu_values,
-                     std::span<const float> accelerator_values,
+                     std::span<const Scalar> cpu_values,
+                     std::span<const Scalar> accelerator_values,
                      double absolute_error, double relative_error) {
   const btrc::PlanStatistics statistics = btrc::Statistics(problem.plan);
-  std::cout << std::setprecision(10) << backend << ',' << problem.dataset << ','
+  std::cout << std::setprecision(10) << backend << ','
+            << tree_hmm::kPrecisionName << ',' << problem.dataset << ','
             << problem.topology << ',' << problem.leaves << ','
             << problem.plan.num_nodes() << ',' << problem.sites << ','
             << (options.site_batch == 0
@@ -556,10 +561,10 @@ inline void PrintRow(const char *backend, const Options &options,
                     : std::min(options.site_batch, problem.sites))
             << ',' << statistics.primitive_levels << ',' << options.repeats
             << ',' << options.conditioning_ms << ',' << cpu_ms << ','
-            << prepare_ms << ',' << accelerator.wall_ms
-            << ',' << accelerator.upload_ms << ',' << accelerator.kernel_ms
-            << ',' << accelerator.download_ms << ',' << total_accelerator_ms
-            << ',' << cpu_ms / total_accelerator_ms << ','
+            << prepare_ms << ',' << accelerator.wall_ms << ','
+            << accelerator.upload_ms << ',' << accelerator.kernel_ms << ','
+            << accelerator.download_ms << ',' << total_accelerator_ms << ','
+            << cpu_ms / total_accelerator_ms << ','
             << std::accumulate(cpu_values.begin(), cpu_values.end(), 0.0) << ','
             << std::accumulate(accelerator_values.begin(),
                                accelerator_values.end(), 0.0)

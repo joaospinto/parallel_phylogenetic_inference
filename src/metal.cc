@@ -23,13 +23,12 @@ std::string DeviceDescription() { return tree_hmm::metal::DeviceDescription(); }
 void Workspace::Reserve(AlignmentModelView model,
                         std::size_t site_batch_capacity) {
   Impl &storage = *impl_;
-  internal::ReserveOperation(storage, model, site_batch_capacity,
-                             internal::PreparedOperation::kLikelihood,
-                             [&](std::size_t batch) {
-                               storage.tree_hmm.ReserveCategorical(
-                                   model.plan, 4, batch, 16,
-                                   model.observation_nodes);
-                             });
+  internal::ReserveOperation(
+      storage, model, site_batch_capacity,
+      internal::PreparedOperation::kLikelihood, [&](std::size_t batch) {
+        storage.tree_hmm.ReserveCategorical(model.plan, 4, batch, 16,
+                                            model.observation_nodes);
+      });
 }
 
 void Workspace::ReserveMaximum(AlignmentModelView model,
@@ -38,8 +37,8 @@ void Workspace::ReserveMaximum(AlignmentModelView model,
   internal::ReserveOperation(
       storage, model, site_batch_capacity,
       internal::PreparedOperation::kMaximum, [&](std::size_t batch) {
-        storage.tree_hmm.ReserveCategoricalMaximum(
-            model.plan, 4, batch, 16, model.observation_nodes);
+        storage.tree_hmm.ReserveCategoricalMaximum(model.plan, 4, batch, 16,
+                                                   model.observation_nodes);
       });
 }
 
@@ -49,8 +48,8 @@ void Workspace::ReserveSampling(AlignmentModelView model,
   internal::ReserveOperation(
       storage, model, site_batch_capacity,
       internal::PreparedOperation::kSampling, [&](std::size_t batch) {
-        storage.tree_hmm.ReserveCategoricalSampling(
-            model.plan, 4, batch, 16, model.observation_nodes);
+        storage.tree_hmm.ReserveCategoricalSampling(model.plan, 4, batch, 16,
+                                                    model.observation_nodes);
       });
 }
 
@@ -60,13 +59,13 @@ void Workspace::ReserveMarginals(AlignmentModelView model,
   internal::ReserveOperation(
       storage, model, site_batch_capacity,
       internal::PreparedOperation::kMarginals, [&](std::size_t batch) {
-        storage.tree_hmm.ReserveCategoricalMarginals(
-            model.plan, 4, batch, 16, model.observation_nodes);
+        storage.tree_hmm.ReserveCategoricalMarginals(model.plan, 4, batch, 16,
+                                                     model.observation_nodes);
       });
 }
 
-std::span<const float> LogLikelihoodsPrepared(AlignmentModelView model,
-                                              Workspace &workspace) {
+std::span<const Scalar> LogLikelihoodsPrepared(AlignmentModelView model,
+                                               Workspace &workspace) {
   Workspace::Impl &storage = *workspace.impl_;
   if (storage.sites != model.sites) {
     throw std::invalid_argument(
@@ -98,7 +97,8 @@ AlignmentMaximumView MaximumAPosterioriPrepared(AlignmentModelView model,
 
 AlignmentPosteriorSampleView
 PosteriorSamplePrepared(AlignmentModelView model,
-                        std::span<const float> uniforms, Workspace &workspace) {
+                        std::span<const Scalar> uniforms,
+                        Workspace &workspace) {
   Workspace::Impl &storage = *workspace.impl_;
   internal::ValidatePrepared(model, storage,
                              internal::PreparedOperation::kSampling);
@@ -106,7 +106,7 @@ PosteriorSamplePrepared(AlignmentModelView model,
       model, uniforms, storage.tree_hmm.CategoricalInputs(),
       [&](std::size_t batch) { return storage.tree_hmm.Uniforms(batch); },
       [&](tree_hmm::BatchedCategoricalModelView factors,
-          std::span<const float> staged_uniforms) {
+          std::span<const Scalar> staged_uniforms) {
         return tree_hmm::metal::PosteriorSamplePrepared(
             factors, staged_uniforms, storage.tree_hmm);
       });

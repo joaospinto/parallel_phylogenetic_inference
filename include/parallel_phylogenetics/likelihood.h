@@ -8,8 +8,11 @@
 #include <vector>
 
 #include "btrc/plan.h"
+#include "tree_hmm/scalar.h"
 
 namespace parallel_phylogenetics {
+
+using Scalar = tree_hmm::Scalar;
 
 // Bit mask of nucleotides compatible with an observation. The ambiguity
 // symbols follow the IUPAC nucleotide code.
@@ -38,25 +41,25 @@ constexpr bool AllowsState(Nucleotide observation, std::size_t state) {
 
 struct SiteModelView {
   const btrc::Plan &plan;
-  std::span<const double> branch_lengths;
+  std::span<const Scalar> branch_lengths;
   std::span<const Nucleotide> observations;
-  std::array<double, 4> root_frequencies{0.25, 0.25, 0.25, 0.25};
-  double substitution_rate = 1.0;
+  std::array<Scalar, 4> root_frequencies{0.25, 0.25, 0.25, 0.25};
+  Scalar substitution_rate = 1.0;
 };
 
 struct SitePosterior {
-  double likelihood = 0.0;
+  Scalar likelihood = 0.0;
   // [node, A/C/G/T], including observed tips and ancestral nodes.
-  std::vector<double> ancestral_states;
+  std::vector<Scalar> ancestral_states;
   // [edge, parent nucleotide, child nucleotide].
-  std::vector<double> substitutions;
+  std::vector<Scalar> substitutions;
 };
 
-std::array<double, 16> JukesCantorTransition(double branch_length,
-                                             double rate = 1.0);
+std::array<Scalar, 16> JukesCantorTransition(Scalar branch_length,
+                                             Scalar rate = 1.0);
 
-double SiteLikelihood(SiteModelView model);
-double SiteLogLikelihood(SiteModelView model);
+Scalar SiteLikelihood(SiteModelView model);
+Scalar SiteLogLikelihood(SiteModelView model);
 SitePosterior AncestralPosterior(SiteModelView model);
 
 } // namespace parallel_phylogenetics
