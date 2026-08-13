@@ -12,9 +12,11 @@ benchmark_run_capacity_bounded() {
   shift 5
   local output_file
   local command_status
+  local capacity_reason
   output_file="$(mktemp "${work_directory}/batch-run.XXXXXX")"
   if [[ "${method}" == "beagle-cpu" ]]; then
     if (
+      ulimit -c 0
       ulimit -v "${host_memory_guard_kib}"
       export MALLOC_ARENA_MAX="${MALLOC_ARENA_MAX:-2}"
       exec "$@"
@@ -32,11 +34,21 @@ benchmark_run_capacity_bounded() {
     cat "${output_file}"
   else
     cat "${output_file}" >&2
-    if [[ "${command_status}" -eq 137 ]] || grep -Eqi \
+    capacity_reason=""
+    if [[ "${command_status}" -eq 137 ]]; then
+      capacity_reason="process-killed"
+    elif [[ "${method}" == "beagle-cpu" &&
+            "${command_status}" -eq 139 ]]; then
+      capacity_reason="beagle-segfault-under-memory-limit"
+    elif grep -Eqi \
         'out[ _]of[ _]memory|bad_alloc|cannot allocate memory|memory allocation|failed to allocate' \
         "${output_file}"; then
+      capacity_reason="allocation-failure"
+    fi
+    if [[ -n "${capacity_reason}" ]]; then
       echo "# capacity_limit method=${method} precision=${precision}" \
-        "first_infeasible_site_batch=${site_batch}"
+        "first_infeasible_site_batch=${site_batch}" \
+        "reason=${capacity_reason}"
       benchmark_capacity_exhausted=1
     else
       rm -f "${output_file}"

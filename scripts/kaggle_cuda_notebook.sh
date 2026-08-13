@@ -42,17 +42,21 @@ else
   exit 2
 fi
 
-prior_report="$(find "${notebook_input_dir}" -type f \
-  -name 'parallel_phylogenetics_cuda_report*.txt' -print -quit || true)"
-if [[ -z "${prior_report}" &&
-      -f "${work}/PREVIOUS_BENCHMARK_REPORT.txt" ]]; then
-  prior_report="${work}/PREVIOUS_BENCHMARK_REPORT.txt"
-fi
-if [[ -n "${prior_report}" ]]; then
-  cp "${prior_report}" "${report}"
-  echo "resuming from $(wc -l < "${prior_report}") previously recorded lines"
+if [[ -s "${report}" ]]; then
+  echo "resuming from $(wc -l < "${report}") lines in the working report"
 else
-  : > "${report}"
+  prior_report="$(find "${notebook_input_dir}" -type f \
+    -name 'parallel_phylogenetics_cuda_report*.txt' -print -quit || true)"
+  if [[ -z "${prior_report}" &&
+        -f "${work}/PREVIOUS_BENCHMARK_REPORT.txt" ]]; then
+    prior_report="${work}/PREVIOUS_BENCHMARK_REPORT.txt"
+  fi
+  if [[ -n "${prior_report}" ]]; then
+    cp "${prior_report}" "${report}"
+    echo "resuming from $(wc -l < "${prior_report}") previously recorded lines"
+  else
+    : > "${report}"
+  fi
 fi
 
 cd "${work}/parallel_phylogenetic_inference"

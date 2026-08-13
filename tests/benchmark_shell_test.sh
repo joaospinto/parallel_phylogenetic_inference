@@ -57,7 +57,25 @@ guard_output="$(benchmark_run_capacity_bounded "${work_directory}" 262144 \
   beagle-cpu FP32 8 bash -c 'ulimit -v')"
 [[ "${guard_output}" == 262144 ]]
 
-if benchmark_run_capacity_bounded "${work_directory}" 262144 cuda FP32 16 \
+benchmark_capacity_exhausted=0
+segfault_output="${work_directory}/segfault.txt"
+benchmark_run_capacity_bounded "${work_directory}" 262144 \
+  beagle-cpu FP32 16 bash -c 'kill -s SEGV $$' \
+  > "${segfault_output}" 2>&1
+grep -Fq "first_infeasible_site_batch=16" "${segfault_output}"
+grep -Fq "reason=beagle-segfault-under-memory-limit" "${segfault_output}"
+[[ "${benchmark_capacity_exhausted}" == 1 ]]
+
+if benchmark_run_capacity_bounded "${work_directory}" 262144 cuda FP32 32 \
+  bash -c 'kill -s SEGV $$' >/dev/null 2>&1; then
+  echo "a CUDA segmentation fault was misclassified as a capacity limit" >&2
+  exit 1
+else
+  status=$?
+  [[ "${status}" == 139 ]]
+fi
+
+if benchmark_run_capacity_bounded "${work_directory}" 262144 cuda FP32 64 \
   bash -c 'exit 42'; then
   echo "an unrelated failure was misclassified as a capacity limit" >&2
   exit 1
@@ -94,6 +112,8 @@ grep -Fq 'stub precision=FP32 skip_fish=1' \
   "${working_root}/parallel_phylogenetics_cuda_report.txt"
 grep -Fq 'stub sections=fish pandit' \
   "${working_root}/parallel_phylogenetics_cuda_report.txt"
+printf 'working-only-row\n' >> \
+  "${working_root}/parallel_phylogenetics_cuda_report.txt"
 
 source_zip="${launcher_root}/parallel_tree_inference_sources.zip"
 (
@@ -107,5 +127,8 @@ TREE_HMM_PRECISIONS_OVERRIDE=FP64 TREE_HMM_SKIP_FISH_TREE=0 \
   bash "${root}/scripts/kaggle_cuda_notebook.sh" "${source_zip}" \
   > "${launcher_root}/zip.log"
 grep -Fq 'source bundle SHA-256:' "${launcher_root}/zip.log"
+grep -Fq 'lines in the working report' "${launcher_root}/zip.log"
+grep -Fq 'working-only-row' \
+  "${working_root}/parallel_phylogenetics_cuda_report.txt"
 grep -Fq 'stub precision=FP64 skip_fish=0' \
   "${working_root}/parallel_phylogenetics_cuda_report.txt"

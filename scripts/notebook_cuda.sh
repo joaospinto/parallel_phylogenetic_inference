@@ -85,24 +85,38 @@ if [[ ! "${fish_minimum_site_batch}" =~ ^[1-9][0-9]*$ ]]; then
   exit 2
 fi
 
-detected_host_memory_kib() {
-  local result
+detected_available_host_memory_kib() {
+  local available
   local candidate
-  result="$(awk '/^MemTotal:/ { print $2; exit }' /proc/meminfo)"
-  for control_file in /sys/fs/cgroup/memory.max \
-                      /sys/fs/cgroup/memory/memory.limit_in_bytes; do
-    if [[ ! -r "${control_file}" ]]; then
-      continue
+  local current
+  available="$(awk '/^MemAvailable:/ { print $2; exit }' /proc/meminfo)"
+
+  if [[ -r /sys/fs/cgroup/memory.max &&
+        -r /sys/fs/cgroup/memory.current ]]; then
+    candidate="$(</sys/fs/cgroup/memory.max)"
+    current="$(</sys/fs/cgroup/memory.current)"
+  elif [[ -r /sys/fs/cgroup/memory/memory.limit_in_bytes &&
+          -r /sys/fs/cgroup/memory/memory.usage_in_bytes ]]; then
+    candidate="$(</sys/fs/cgroup/memory/memory.limit_in_bytes)"
+    current="$(</sys/fs/cgroup/memory/memory.usage_in_bytes)"
+  else
+    candidate=""
+    current=""
+  fi
+  if [[ "${candidate}" =~ ^[0-9]+$ && "${current}" =~ ^[0-9]+$ &&
+        "${candidate}" -gt "${current}" ]]; then
+    candidate=$(((candidate - current) / 1024))
+    if [[ "${candidate}" -lt "${available}" ]]; then
+      available="${candidate}"
     fi
-    candidate="$(<"${control_file}")"
-    if [[ "${candidate}" =~ ^[0-9]+$ ]]; then
-      candidate=$((candidate / 1024))
-      if [[ "${candidate}" -gt 0 && "${candidate}" -lt "${result}" ]]; then
-        result="${candidate}"
-      fi
-    fi
-  done
-  echo "${result}"
+  fi
+  echo "${available}"
+}
+
+current_host_memory_guard_kib() {
+  local available
+  available="$(detected_available_host_memory_kib)"
+  echo $((available * host_memory_guard_percent / 100))
 }
 
 section_selected() {
@@ -120,10 +134,7 @@ benchmark_section_enabled() {
   [[ "${TREE_HMM_SKIP_BENCHMARKS:-0}" != "1" ]] && section_selected "$1"
 }
 
-host_memory_limit_kib="$(detected_host_memory_kib)"
-host_memory_guard_kib=$((
-  host_memory_limit_kib * host_memory_guard_percent / 100
-))
+initial_host_memory_guard_kib="$(current_host_memory_guard_kib)"
 
 echo "=== Source revisions ==="
 if [[ -f "$(dirname "${repo_dir}")/SOURCE_REVISIONS.txt" ]]; then
@@ -160,7 +171,8 @@ clocks.max.graphics,clocks.max.memory --format=csv || true
 echo "selected Bazel CUDA architecture: sm_${cuda_arch}"
 echo "selected notebook sections: ${benchmark_sections[*]}"
 echo "host-memory guard for CPU capacity probes:" \
-  "${host_memory_guard_kib} KiB (${host_memory_guard_percent}% of detected limit)"
+  "${initial_host_memory_guard_kib} KiB" \
+  "(${host_memory_guard_percent}% of currently available memory)"
 if [[ -n "${resume_report}" ]]; then
   echo "resuming completed benchmark rows from ${resume_report}"
 fi
@@ -279,6 +291,9 @@ for precision in "${precisions[@]}"; do
             "sites=${sites} site_batch=${sites}"
           continue
         fi
+        echo "# benchmark_start method=cuda precision=${precision}" \
+          "dataset=synthetic topology=${topology} leaves=${leaves}" \
+          "sites=${sites} site_batch=${sites}"
         bazel-bin/cuda_benchmark \
           --topology "${topology}" \
           --leaves "${leaves}" \
@@ -303,6 +318,10 @@ for precision in "${precisions[@]}"; do
                 "site_batch=${sites}"
               continue
             fi
+            echo "# benchmark_start method=beagle-${resource}" \
+              "precision=${precision} dataset=synthetic" \
+              "topology=${topology} leaves=${leaves} sites=${sites}" \
+              "site_batch=${sites}"
             bazel-bin/beagle_benchmark \
               --beagle-resource "${resource}" \
               --beagle-threads 1 \
@@ -335,8 +354,11 @@ for precision in "${precisions[@]}"; do
           "dataset=actinopt_12k_raxml site_batch=${site_batch}"
         continue
       fi
+      echo "# benchmark_start method=cuda precision=${precision}" \
+        "dataset=actinopt_12k_raxml site_batch=${site_batch}"
       benchmark_run_capacity_bounded "${notebook_work_dir}" \
-        "${host_memory_guard_kib}" cuda "${precision}" "${site_batch}" \
+        "$(current_host_memory_guard_kib)" cuda "${precision}" \
+        "${site_batch}" \
         bazel-bin/cuda_benchmark \
         --newick "${fish_dir}/actinopt_12k_raxml.tre" \
         --phylip "${fish_dir}/final_alignment.phylip" \
@@ -365,8 +387,10 @@ for precision in "${precisions[@]}"; do
               "dataset=actinopt_12k_raxml site_batch=${site_batch}"
             continue
           fi
+          echo "# benchmark_start method=${method} precision=${precision}" \
+            "dataset=actinopt_12k_raxml site_batch=${site_batch}"
           benchmark_run_capacity_bounded "${notebook_work_dir}" \
-            "${host_memory_guard_kib}" "${method}" "${precision}" \
+            "$(current_host_memory_guard_kib)" "${method}" "${precision}" \
             "${site_batch}" bazel-bin/beagle_benchmark \
             --beagle-resource "${resource}" \
             --beagle-threads 1 \

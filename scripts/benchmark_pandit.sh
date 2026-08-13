@@ -120,6 +120,9 @@ while IFS=, read -r family leaves raw_sites selected_sites; do
       arguments+=(--beagle-resource cuda --beagle-threads 1)
       ;;
   esac
+  echo "# benchmark_start method=${backend}" \
+    "precision=${precision_label} dataset=${family}" \
+    "leaves=${leaves} sites=${selected_sites}"
   "bazel-bin/${target}" "${arguments[@]}"
   selected=$((selected + 1))
 done < "${manifest}"
