@@ -191,6 +191,19 @@
   },
   "selectedYankedVersions": {},
   "moduleExtensions": {
+    "//third_party/beagle:extension.bzl%beagle": {
+      "general": {
+        "bzlTransitiveDigest": "Ft6ZPK/Bp1Q6P8p9FihnWOv1Xx/9APJHExJ+up5HiJw=",
+        "usagesDigest": "pHm7rVc3XEybb8/Wx+/sCMdmR3asC0+Z/mjC7k9pfaY=",
+        "recordedInputs": [],
+        "generatedRepoSpecs": {
+          "beagle": {
+            "repoRuleId": "@@//third_party/beagle:extension.bzl%_beagle_repository",
+            "attributes": {}
+          }
+        }
+      }
+    },
     "@@rules_cuda+//cuda:extensions.bzl%toolchain": {
       "general": {
         "bzlTransitiveDigest": "KvlM8RQ+m1CHcDiikj56s8spV/6NwiJDypZXgD04dZA=",

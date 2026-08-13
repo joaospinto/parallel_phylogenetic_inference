@@ -16,6 +16,9 @@ cuda.toolkit(
 )
 use_repo(cuda, "cuda")
 
+beagle = use_extension("//third_party/beagle:extension.bzl", "beagle")
+use_repo(beagle, "beagle")
+
 local_path_override(
     module_name = "bidirectional_tree_rake_compress",
     path = "../bidirectional_tree_rake_compress",

@@ -27,6 +27,13 @@ The current implementation provides:
   tree-HMM representation and handle capacity-bounded site batches;
 - native Metal and CUDA benchmark executables with numerical cross-checks.
 
+The optional `beagle_benchmark` target compares the same JC69 likelihood with
+the established BEAGLE library. BEAGLE is confined to benchmark code and is
+not a dependency of the phylogenetic, tree-HMM, or rake--compress libraries.
+The adapter requires the requested CPU or CUDA implementation and the same
+FP32 or FP64 precision as this package; every result identifies the actual
+BEAGLE resource and implementation selected at runtime.
+
 Alignment conversion writes compact categorical observations directly into
 caller-provided accelerator input storage. CUDA uses pinned host buffers and
 Metal uses shared buffers, so the same generic tree-HMM call neither makes a
@@ -115,6 +122,19 @@ bazel run //:metal_benchmark --config=fp32 -- \
   --newick tree.nwk --phylip alignment.phy --site-batch 1024 --repeats 5
 ```
 
+For a matched-precision CPU comparison with an installed BEAGLE library:
+
+```sh
+PRECISION=fp64 scripts/benchmark_beagle.sh \
+  --newick family.nwk --fasta family.fasta \
+  --beagle-resource cpu --beagle-threads 1 --repeats 5
+```
+
+On Linux, `scripts/install_beagle_cuda.sh` checksum-verifies and builds the
+pinned BEAGLE 4.0.1 release with its CUDA plugin. The optional local dependency
+is discovered through `BEAGLE_PREFIX`; ordinary Bazel targets remain buildable
+when BEAGLE is absent.
+
 Warmup and workspace allocation are excluded. CPU and accelerator execution
 order alternates between repetitions to reduce order bias. The standard Metal
 sweep additionally performs five seconds of untimed interleaved conditioning
@@ -139,6 +159,12 @@ extractor accepts family, leaf-count, and result-count filters; run
 Git and retain the terms of the [PANDIT data
 license](https://www.ebi.ac.uk/goldman-srv/pandit/Pandit/data/COPYRIGHT).
 
+`scripts/benchmark_pandit.sh` evaluates a deterministic subset selected from
+the generated manifest. By default it includes every family with at least 100
+tips; PANDIT 17.0 has 325 such families. It supports our Metal or CUDA backend
+and BEAGLE's CPU or CUDA backend, and accepts environment variables for the
+minimum tip count, repeat count, precision, and an optional smoke-test limit.
+
 The Fish Tree of Life supplies a much larger empirical nucleotide case with
 11,638 taxa and 24,143 sites. `scripts/fetch_fish_tree.sh` downloads and
 checksum-verifies its published RAxML tree and full alignment. The CUDA
@@ -151,6 +177,9 @@ capacities; it does not truncate or replicate the data.
 `notebooks/kaggle_cuda_benchmark.ipynb` records machine information, executes
 the host and emulated-kernel tests, validates the native CUDA implementation
 with Compute Sanitizer, and then runs the same balanced and caterpillar sweep.
+It additionally compares against pinned BEAGLE 4.0.1 on the CPU and CUDA
+device and evaluates the 325-family PANDIT subset and complete Fish Tree of
+Life alignment in matched FP64 and FP32.
 
 Until these repositories are public, create the notebook input bundle from
 clean commits:

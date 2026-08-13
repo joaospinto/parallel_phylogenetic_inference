@@ -94,6 +94,22 @@ if [[ "${TREE_HMM_SKIP_BENCHMARKS:-0}" != "1" &&
   fish_dir="${notebook_work_dir}/fish_tree_of_life"
   bash "${repo_dir}/scripts/fetch_fish_tree.sh" "${fish_dir}"
 fi
+if [[ "${TREE_HMM_SKIP_BENCHMARKS:-0}" != "1" &&
+      "${TREE_HMM_SKIP_PANDIT:-0}" != "1" ]]; then
+  pandit_dir="${notebook_work_dir}/pandit"
+  bash "${repo_dir}/scripts/fetch_pandit.sh" "${pandit_dir}" \
+    --min-leaves 100
+fi
+
+if [[ "${TREE_HMM_SKIP_BENCHMARKS:-0}" != "1" &&
+      "${TREE_HMM_SKIP_BEAGLE:-0}" != "1" ]]; then
+  beagle_prefix="${notebook_work_dir}/beagle-4.0.1"
+  bash "${repo_dir}/scripts/install_beagle_cuda.sh" "${beagle_prefix}"
+  export BEAGLE_PREFIX="${beagle_prefix}"
+  # shellcheck source=scripts/beagle_environment.sh
+  source "${repo_dir}/scripts/beagle_environment.sh"
+  parallel_phylogenetics_configure_beagle
+fi
 
 for precision in "${precisions[@]}"; do
   precision_config="$(tr '[:upper:]' '[:lower:]' <<< "${precision}")"
@@ -152,15 +168,64 @@ for precision in "${precisions[@]}"; do
       done
     done
 
+    if [[ "${TREE_HMM_SKIP_BEAGLE:-0}" != "1" ]]; then
+      echo "=== ${precision} BEAGLE CPU and CUDA comparison ==="
+      "${bazel_command}" build "${precision_args[@]}" //:beagle_benchmark
+      for resource in cpu cuda; do
+        for topology in balanced caterpillar; do
+          for specification in "${cases[@]}"; do
+            read -r leaves sites <<< "${specification}"
+            bazel-bin/beagle_benchmark \
+              --beagle-resource "${resource}" \
+              --beagle-threads 1 \
+              --topology "${topology}" \
+              --leaves "${leaves}" \
+              --sites "${sites}" \
+              --repeats "${repeats}"
+          done
+        done
+      done
+    fi
+
     if [[ "${TREE_HMM_SKIP_FISH_TREE:-0}" != "1" ]]; then
       echo "=== ${precision} Fish Tree of Life public-data benchmark ==="
-      for site_batch in 256 1024 4096; do
+      for site_batch in 256 512 1024 2048 4096 8192; do
         bazel-bin/cuda_benchmark \
           --newick "${fish_dir}/actinopt_12k_raxml.tre" \
           --phylip "${fish_dir}/final_alignment.phylip" \
           --site-batch "${site_batch}" \
           --repeats "${empirical_repeats}"
       done
+      if [[ "${TREE_HMM_SKIP_BEAGLE:-0}" != "1" ]]; then
+        echo "=== ${precision} Fish Tree of Life BEAGLE comparison ==="
+        for resource in cpu cuda; do
+          for site_batch in 256 512 1024 2048 4096 8192; do
+            bazel-bin/beagle_benchmark \
+              --beagle-resource "${resource}" \
+              --beagle-threads 1 \
+              --newick "${fish_dir}/actinopt_12k_raxml.tre" \
+              --phylip "${fish_dir}/final_alignment.phylip" \
+              --site-batch "${site_batch}" \
+              --repeats "${empirical_repeats}"
+          done
+        done
+      fi
+    fi
+
+    if [[ "${TREE_HMM_SKIP_PANDIT:-0}" != "1" ]]; then
+      echo "=== ${precision} PANDIT 17.0 corpus benchmark ==="
+      PRECISION="${precision_config}" PANDIT_SKIP_BUILD=1 \
+        TREE_HMM_EMPIRICAL_REPEATS="${empirical_repeats}" \
+        bash "${repo_dir}/scripts/benchmark_pandit.sh" cuda \
+          "${pandit_dir}/families"
+      if [[ "${TREE_HMM_SKIP_BEAGLE:-0}" != "1" ]]; then
+        for resource in beagle-cpu beagle-cuda; do
+          PRECISION="${precision_config}" PANDIT_SKIP_BUILD=1 \
+            TREE_HMM_EMPIRICAL_REPEATS="${empirical_repeats}" \
+            bash "${repo_dir}/scripts/benchmark_pandit.sh" "${resource}" \
+              "${pandit_dir}/families"
+        done
+      fi
     fi
   fi
 done

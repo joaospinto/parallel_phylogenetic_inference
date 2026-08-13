@@ -131,3 +131,19 @@ cc_binary(
         "@parallel_tree_hmm//:tree_hmm_cuda",
     ],
 )
+
+# Optional benchmark against the external BEAGLE likelihood library. The
+# target is deliberately manual so BEAGLE is not a dependency of the library
+# or its ordinary build and test targets.
+cc_binary(
+    name = "beagle_benchmark",
+    srcs = [
+        "benchmarks/beagle_benchmark.cc",
+        "benchmarks/benchmark.h",
+    ],
+    tags = ["manual"],
+    deps = [
+        ":parallel_phylogenetics",
+        "@beagle//:beagle",
+    ],
+)
