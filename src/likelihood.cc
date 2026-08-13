@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numeric>
 #include <stdexcept>
 #include <utility>
@@ -75,9 +76,13 @@ std::array<Scalar, 16> JukesCantorTransition(Scalar branch_length,
     throw std::invalid_argument(
         "Jukes-Cantor branch length and rate must be finite and nonnegative");
   }
-  const Scalar decay = std::exp(-Scalar{4} * rate * branch_length / Scalar{3});
-  const Scalar same = Scalar{0.25} + Scalar{0.75} * decay;
-  const Scalar different = Scalar{0.25} - Scalar{0.25} * decay;
+  // Computing 0.25 * (1 - exp(-4rt/3)) directly loses every off-diagonal
+  // probability when 4rt/3 is small compared with machine epsilon.  expm1
+  // retains the small positive difference from one.
+  const Scalar different =
+      -Scalar{0.25} *
+      std::expm1(-Scalar{4} * rate * branch_length / Scalar{3});
+  const Scalar same = Scalar{1} - Scalar{3} * different;
   std::array<Scalar, 16> result{};
   for (std::size_t parent = 0; parent < 4; ++parent) {
     for (std::size_t child = 0; child < 4; ++child)

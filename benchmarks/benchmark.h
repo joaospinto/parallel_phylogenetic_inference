@@ -400,21 +400,24 @@ inline Problem MakeProblem(const Options &options, std::size_t replicate = 0) {
   btrc::Plan plan = btrc::MakePlan(topology.parents);
   const double planning_ms = Milliseconds(planning_begin, Clock::now());
   std::vector<Scalar> lengths;
+  std::vector<Nucleotide> observations;
   if (simulate_jc69) {
-    lengths = MakeClockLikeBranchLengths(
+    const std::vector<double> simulation_lengths = MakeClockLikeBranchLengths(
         plan, *options.evolutionary_root_to_tip_distance);
+    observations = SimulateJukesCantorAlignment(
+        plan, simulation_lengths, topology.leaves, sites, seed);
+    lengths.reserve(simulation_lengths.size());
+    std::transform(simulation_lengths.begin(), simulation_lengths.end(),
+                   std::back_inserter(lengths),
+                   [](double length) { return static_cast<Scalar>(length); });
   } else {
     lengths.resize(plan.num_edges());
     for (std::size_t edge = 0; edge < lengths.size(); ++edge)
       lengths[edge] = Scalar{0.02} + Scalar{0.18} * static_cast<Scalar>(
                                                   DeterministicRandom(seed + edge)
                                                       .Unit());
+    observations = MakeUniquePatterns(sites, leaves, seed);
   }
-  std::vector<Nucleotide> observations =
-      simulate_jc69
-          ? SimulateJukesCantorAlignment(plan, lengths, topology.leaves, sites,
-                                         seed)
-          : MakeUniquePatterns(sites, leaves, seed);
 
   Problem result{std::move(plan),
                  std::move(lengths),

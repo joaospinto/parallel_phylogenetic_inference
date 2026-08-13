@@ -140,13 +140,17 @@ int main() {
   Check((repeated.pattern_weights == std::vector<std::uint64_t>{2, 2}));
   Check(repeated.observations.size() == 4);
 
+  constexpr std::array<std::uint64_t, 4> kSimulationFingerprints{
+      2641326333024873219ULL, 10536925141760390345ULL,
+      10735218043514194703ULL, 5234058107032935918ULL};
+  std::size_t simulation_fixture = 0;
   for (const std::string topology : {"yule", "beta-critical", "uniform",
                                      "caterpillar"}) {
     const SyntheticTopology clock_topology =
         MakeSyntheticTopology(topology, 32, 71);
     const btrc::Plan clock_plan = btrc::MakePlan(clock_topology.parents);
     constexpr double kEvolutionaryHeight = 0.1;
-    const std::vector<parallel_phylogenetics::Scalar> branch_lengths =
+    const std::vector<double> branch_lengths =
         MakeClockLikeBranchLengths(clock_plan, kEvolutionaryHeight);
     for (const double distance : RootToTipDistances(
              clock_plan, branch_lengths, clock_topology.leaves)) {
@@ -160,6 +164,12 @@ int main() {
         clock_plan, branch_lengths, clock_topology.leaves, 64, 8129);
     Check(first_simulation == repeated_simulation);
     Check(first_simulation != different_simulation);
+    std::uint64_t fingerprint = 1469598103934665603ULL;
+    for (const auto observation : first_simulation) {
+      fingerprint ^= static_cast<std::uint8_t>(observation);
+      fingerprint *= 1099511628211ULL;
+    }
+    Check(fingerprint == kSimulationFingerprints[simulation_fixture++]);
   }
 
   Options raw_options;

@@ -214,7 +214,7 @@ inline SyntheticTopology MakeSyntheticTopology(std::string_view topology,
   return result;
 }
 
-inline std::vector<Scalar>
+inline std::vector<double>
 MakeClockLikeBranchLengths(const btrc::Plan &plan,
                            double evolutionary_root_to_tip_distance) {
   if (!(evolutionary_root_to_tip_distance > 0.0) ||
@@ -255,15 +255,14 @@ MakeClockLikeBranchLengths(const btrc::Plan &plan,
   if (root_height == 0)
     throw std::invalid_argument("clock-like branch lengths require an edge");
 
-  std::vector<Scalar> lengths(plan.num_edges());
+  std::vector<double> lengths(plan.num_edges());
   for (std::size_t edge = 0; edge < plan.num_edges(); ++edge) {
     const std::size_t parent_height = backward_height[plan.edge_parents()[edge]];
     const std::size_t child_height = backward_height[plan.edge_children()[edge]];
-    lengths[edge] = static_cast<Scalar>(
-        evolutionary_root_to_tip_distance *
-        static_cast<double>(parent_height - child_height) /
-        static_cast<double>(root_height));
-    if (!(lengths[edge] > Scalar{0}))
+    lengths[edge] = evolutionary_root_to_tip_distance *
+                    static_cast<double>(parent_height - child_height) /
+                    static_cast<double>(root_height);
+    if (!(lengths[edge] > 0.0))
       throw std::underflow_error("clock-like branch length rounded to zero");
   }
   return lengths;
@@ -271,7 +270,7 @@ MakeClockLikeBranchLengths(const btrc::Plan &plan,
 
 inline std::vector<double>
 RootToTipDistances(const btrc::Plan &plan,
-                   std::span<const Scalar> branch_lengths,
+                   std::span<const double> branch_lengths,
                    std::span<const btrc::Index> tips) {
   if (branch_lengths.size() != plan.num_edges())
     throw std::invalid_argument("one branch length is required per edge");
@@ -300,16 +299,20 @@ RootToTipDistances(const btrc::Plan &plan,
 
 inline std::vector<Nucleotide>
 SimulateJukesCantorAlignment(const btrc::Plan &plan,
-                             std::span<const Scalar> branch_lengths,
+                             std::span<const double> branch_lengths,
                              std::span<const btrc::Index> tips,
                              std::size_t raw_sites, std::uint64_t seed,
-                             Scalar substitution_rate = Scalar{1}) {
+                             double substitution_rate = 1.0) {
   if (raw_sites == 0 || tips.empty())
     throw std::invalid_argument("simulation requires sites and observed tips");
   if (raw_sites > std::numeric_limits<std::size_t>::max() / tips.size())
     throw std::length_error("simulated alignment size overflows size_t");
   if (branch_lengths.size() != plan.num_edges())
     throw std::invalid_argument("one branch length is required per edge");
+  if (!(substitution_rate >= 0.0) || !std::isfinite(substitution_rate)) {
+    throw std::invalid_argument(
+        "the substitution rate must be finite and nonnegative");
+  }
   if (!std::is_sorted(tips.begin(), tips.end()) ||
       std::adjacent_find(tips.begin(), tips.end()) != tips.end()) {
     throw std::invalid_argument(
@@ -337,10 +340,15 @@ SimulateJukesCantorAlignment(const btrc::Plan &plan,
 
   constexpr std::array<Nucleotide, 4> kStates{
       Nucleotide::kA, Nucleotide::kC, Nucleotide::kG, Nucleotide::kT};
-  std::vector<std::array<Scalar, 16>> transitions(plan.num_edges());
+  std::vector<double> different_probabilities(plan.num_edges());
   for (std::size_t edge = 0; edge < plan.num_edges(); ++edge) {
-    transitions[edge] =
-        JukesCantorTransition(branch_lengths[edge], substitution_rate);
+    const double length = branch_lengths[edge];
+    if (!(length >= 0.0) || !std::isfinite(length)) {
+      throw std::invalid_argument(
+          "JC69 branch lengths must be finite and nonnegative");
+    }
+    different_probabilities[edge] =
+        -0.25 * std::expm1(-4.0 * substitution_rate * length / 3.0);
   }
 
   DeterministicRandom random(seed);
@@ -352,12 +360,13 @@ SimulateJukesCantorAlignment(const btrc::Plan &plan,
       const btrc::Index child = preorder[index];
       const btrc::Index parent = plan.edge_parents()[incoming[child]];
       const std::size_t parent_state = states[parent];
-      const auto &transition = transitions[incoming[child]];
+      const double different = different_probabilities[incoming[child]];
+      const double same = 1.0 - 3.0 * different;
       const double draw = random.Unit();
       double cumulative = 0.0;
       std::size_t child_state = 3;
       for (std::size_t state = 0; state < 3; ++state) {
-        cumulative += transition[parent_state * 4 + state];
+        cumulative += state == parent_state ? same : different;
         if (draw < cumulative) {
           child_state = state;
           break;

@@ -102,6 +102,14 @@ double FelsensteinReference(
 } // namespace
 
 int main() {
+  const auto tiny_transition =
+      parallel_phylogenetics::JukesCantorTransition(
+          static_cast<parallel_phylogenetics::Scalar>(1e-12));
+  Check(tiny_transition[1] > parallel_phylogenetics::Scalar{0});
+  Check(tiny_transition[0] + parallel_phylogenetics::Scalar{3} *
+                                  tiny_transition[1] ==
+        parallel_phylogenetics::Scalar{1});
+
   const btrc::Plan plan =
       btrc::MakePlan(std::vector<std::int64_t>{-1, 0, 0, 1, 1, 3, 2});
   const std::vector<parallel_phylogenetics::Scalar> lengths{0.1, 0.3,  0.2,
