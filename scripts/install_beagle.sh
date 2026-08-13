@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-version=4.0.1
-archive_sha256=9d258cd9bedd86d7c28b91587acd1132f4e01d4f095c657ad4dc93bd83d4f120
+version="${BEAGLE_VERSION_LABEL:-4.0.1}"
+source_revision="${BEAGLE_SOURCE_REVISION:-v4.0.1}"
+source_url="${BEAGLE_SOURCE_URL:-https://github.com/beagle-dev/beagle-lib/archive/refs/tags/v4.0.1.tar.gz}"
+archive_sha256="${BEAGLE_SOURCE_SHA256:-9d258cd9bedd86d7c28b91587acd1132f4e01d4f095c657ad4dc93bd83d4f120}"
+if [[ ! "${archive_sha256}" =~ ^[0-9a-fA-F]{64}$ ]]; then
+  echo "BEAGLE_SOURCE_SHA256 must be the exact archive SHA-256" >&2
+  exit 2
+fi
 backend="${BEAGLE_BUILD_BACKEND:-cuda}"
 if [[ "${backend}" != cpu && "${backend}" != cuda ]]; then
   echo "BEAGLE_BUILD_BACKEND must be cpu or cuda" >&2
@@ -14,9 +20,11 @@ if [[ $# -gt 1 ]]; then
 fi
 prefix="${1:-${BEAGLE_PREFIX:-${PWD}/beagle-${version}}}"
 prefix="$(mkdir -p "${prefix}" && cd "${prefix}" && pwd)"
-marker="${prefix}/.parallel-phylogenetics-beagle-${version}-${backend}"
+marker="${prefix}/.parallel-phylogenetics-beagle-${archive_sha256}-${backend}"
+metadata="${prefix}/BEAGLE_BUILD_METADATA.txt"
 if [[ -f "${marker}" ]]; then
   echo "BEAGLE ${version} is already installed in ${prefix}"
+  [[ -f "${metadata}" ]] && cat "${metadata}"
   exit 0
 fi
 
@@ -131,7 +139,7 @@ if [[ ! -f "${archive}" ]] ||
      sha256sum --check --status; then
   temporary="${archive}.download"
   curl --fail --location --silent --show-error \
-    "https://github.com/beagle-dev/beagle-lib/archive/refs/tags/v${version}.tar.gz" \
+    "${source_url}" \
     --output "${temporary}"
   printf '%s  %s\n' "${archive_sha256}" "${temporary}" |
     sha256sum --check --status
@@ -159,5 +167,17 @@ else
     --parallel "${BEAGLE_BUILD_JOBS:-$(nproc)}"
 fi
 cmake --install "${build_directory}"
+{
+  echo "beagle_version_label=${version}"
+  echo "beagle_source_revision=${source_revision}"
+  echo "beagle_source_url=${source_url}"
+  echo "beagle_source_sha256=${archive_sha256}"
+  echo "beagle_build_backend=${backend}"
+  echo "beagle_cmake_build_cuda=${build_cuda}"
+  echo "beagle_cmake_build_opencl=OFF"
+  echo "beagle_cmake_build_jni=OFF"
+  echo "beagle_cmake_build_openmp=OFF"
+  echo "beagle_cmake_build_bit=OFF"
+} > "${metadata}"
 touch "${marker}"
 echo "Installed BEAGLE ${version} with ${backend} support in ${prefix}"

@@ -39,6 +39,7 @@ def records(paths: list[Path]) -> list[dict[str, str]]:
                 if header is None or fields[0] not in {
                     "cuda",
                     "metal",
+                    "rocm",
                     "beagle",
                 }:
                     continue
@@ -62,7 +63,7 @@ def records(paths: list[Path]) -> list[dict[str, str]]:
 
 
 def method(row: dict[str, str]) -> str:
-    if row.get("backend") in {"cuda", "metal"}:
+    if row.get("backend") in {"cuda", "metal", "rocm"}:
         return row["backend"]
     if row.get("baseline") == "beagle":
         resource = row.get("beagle_resource")
@@ -85,8 +86,14 @@ def number(row: dict[str, str], field: str) -> float:
 
 def median_rows(rows: list[dict[str, str]]) -> dict[str, object]:
     first = rows[0]
-    native = method(first) in {"cuda", "metal"}
-    total_field = "total_accelerator_ms" if native else "beagle_total_ms"
+    native = method(first) in {"cuda", "metal", "rocm"}
+    total_field = (
+        "end_to_end_ms"
+        if native and "end_to_end_ms" in first
+        else "total_accelerator_ms"
+        if native
+        else "beagle_total_ms"
+    )
     result: dict[str, object] = {field: first[field] for field in IDENTITY}
     result.update(
         method=method(first),
@@ -220,7 +227,7 @@ def write_corpus(rows: list[dict[str, object]], accelerator: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("logs", nargs="+", type=Path)
-    parser.add_argument("--corpus", choices=("cuda", "metal"))
+    parser.add_argument("--corpus", choices=("cuda", "metal", "rocm"))
     parser.add_argument("--dataset-prefix")
     parser.add_argument("--precision", choices=("FP32", "FP64"))
     arguments = parser.parse_args()

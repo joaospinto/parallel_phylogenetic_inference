@@ -281,6 +281,23 @@ int main() {
   Check(parsed_phylip.records[1].name == "B_taxon");
   Check(parsed_phylip.records[1].sequence == "A-N");
 
+  const parallel_phylogenetics::SequenceAlignment interleaved_phylip =
+      parallel_phylogenetics::ParsePhylip(
+          "3 9\nA ACG\nB_taxon A-N\nC TCG\n\n"
+          "  TTA\n  CCG\n  GGA\n\n  CCC\n  TTT\n  AAA\n");
+  Check(interleaved_phylip.sites == 9);
+  Check(interleaved_phylip.records[0].sequence == "ACGTTACCC");
+  Check(interleaved_phylip.records[1].sequence == "A-NCCGTTT");
+  Check(interleaved_phylip.records[2].sequence == "TCGGGAAAA");
+
+  const parallel_phylogenetics::SequenceAlignment labelled_interleaved =
+      parallel_phylogenetics::ParsePhylip(
+          "3 6\nA ACG\nB_taxon A-N\nC TCG\n\n"
+          "A TTA\nB_taxon CCG\nC GGA\n");
+  Check(labelled_interleaved.records[0].sequence == "ACGTTA");
+  Check(labelled_interleaved.records[1].sequence == "A-NCCG");
+  Check(labelled_interleaved.records[2].sequence == "TCGGGA");
+
   const parallel_phylogenetics::Phylogeny ambiguity_tree =
       parallel_phylogenetics::ParseNewick(
           "((A:0.1,B:0.2):0.3,(C:0.4,D:0.5):0.6);");

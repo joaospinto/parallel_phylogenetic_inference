@@ -17,6 +17,12 @@ sh_test(
     ],
 )
 
+sh_test(
+    name = "corpus_preparation_test",
+    srcs = ["tests/corpus_preparation_test.sh"],
+    data = ["scripts/prepare_streaming_alignment.py"],
+)
+
 config_setting(
     name = "macos_fp32",
     constraint_values = ["@platforms//os:osx"],
@@ -54,6 +60,19 @@ cc_test(
     name = "likelihood_test",
     srcs = ["tests/likelihood_test.cc"],
     deps = [":parallel_phylogenetics"],
+)
+
+cc_test(
+    name = "synthetic_test",
+    srcs = [
+        "benchmarks/benchmark.h",
+        "benchmarks/synthetic.h",
+        "tests/synthetic_test.cc",
+    ],
+    deps = [
+        ":parallel_phylogenetics",
+        "@bidirectional_tree_rake_compress//:btrc",
+    ],
 )
 
 cc_library(
@@ -240,6 +259,7 @@ cc_binary(
     srcs = [
         "benchmarks/benchmark.h",
         "benchmarks/metal_benchmark.cc",
+        "benchmarks/synthetic.h",
     ],
     target_compatible_with = select({
         ":macos_fp32": [],
@@ -252,11 +272,30 @@ cc_binary(
 )
 
 cc_binary(
+    name = "metal_tasks_benchmark",
+    srcs = [
+        "benchmarks/benchmark.h",
+        "benchmarks/inference_tasks_benchmark.inc",
+        "benchmarks/metal_tasks_benchmark.cc",
+        "benchmarks/synthetic.h",
+    ],
+    target_compatible_with = select({
+        ":macos_fp32": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":parallel_phylogenetics",
+        ":parallel_phylogenetics_metal",
+    ],
+)
+
+cc_binary(
     name = "cuda_benchmark",
     srcs = [
         "benchmarks/benchmark.h",
         "benchmarks/cuda_benchmark.cc",
         "benchmarks/gpu_backend_benchmark.inc",
+        "benchmarks/synthetic.h",
     ],
     target_compatible_with = requires_cuda(),
     deps = [
@@ -266,11 +305,26 @@ cc_binary(
 )
 
 cc_binary(
+    name = "cuda_tasks_benchmark",
+    srcs = [
+        "benchmarks/benchmark.h",
+        "benchmarks/cuda_tasks_benchmark.cc",
+        "benchmarks/inference_tasks_benchmark.inc",
+        "benchmarks/synthetic.h",
+    ],
+    target_compatible_with = requires_cuda(),
+    deps = [
+        ":parallel_phylogenetics_cuda",
+    ],
+)
+
+cc_binary(
     name = "rocm_benchmark",
     srcs = [
         "benchmarks/benchmark.h",
         "benchmarks/gpu_backend_benchmark.inc",
         "benchmarks/rocm_benchmark.cc",
+        "benchmarks/synthetic.h",
     ],
     target_compatible_with = select({
         ":rocm_enabled_linux": [],
@@ -282,6 +336,23 @@ cc_binary(
     ],
 )
 
+cc_binary(
+    name = "rocm_tasks_benchmark",
+    srcs = [
+        "benchmarks/benchmark.h",
+        "benchmarks/inference_tasks_benchmark.inc",
+        "benchmarks/rocm_tasks_benchmark.cc",
+        "benchmarks/synthetic.h",
+    ],
+    target_compatible_with = select({
+        ":rocm_enabled_linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":parallel_phylogenetics_rocm",
+    ],
+)
+
 # Optional benchmark against the external BEAGLE likelihood library. The
 # target is deliberately manual so BEAGLE is not a dependency of the library
 # or its ordinary build and test targets.
@@ -290,6 +361,7 @@ cc_binary(
     srcs = [
         "benchmarks/beagle_benchmark.cc",
         "benchmarks/benchmark.h",
+        "benchmarks/synthetic.h",
     ],
     tags = ["manual"],
     deps = [

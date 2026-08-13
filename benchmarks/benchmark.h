@@ -2,8 +2,10 @@
 #define PARALLEL_PHYLOGENETICS_BENCHMARK_H_
 
 #include "parallel_phylogenetics/alignment.h"
-#include "src/alignment_internal.h"
 #include "parallel_phylogenetics/io.h"
+#include "src/alignment_internal.h"
+
+#include "synthetic.h"
 
 #include <algorithm>
 #include <chrono>
@@ -12,19 +14,26 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
 #include <numeric>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace parallel_phylogenetics::benchmark {
 
 using Clock = std::chrono::steady_clock;
+
+inline double Milliseconds(Clock::time_point begin, Clock::time_point end) {
+  return std::chrono::duration<double, std::milli>(end - begin).count();
+}
 
 struct Options {
   std::size_t leaves = 1024;
@@ -33,9 +42,15 @@ struct Options {
   int repeats = 5;
   std::size_t conditioning_ms = 0;
   std::string topology = "balanced";
+  std::uint64_t seed = 1;
+  std::size_t replicate_start = 0;
+  std::size_t replicates = 1;
+  bool compress_patterns = false;
   std::optional<std::filesystem::path> newick;
   std::optional<std::filesystem::path> fasta;
   std::optional<std::filesystem::path> phylip;
+  std::optional<std::filesystem::path> pattern_weights;
+  std::optional<std::string> dataset_label;
 };
 
 struct Problem {
@@ -47,6 +62,13 @@ struct Problem {
   std::string topology;
   std::size_t leaves = 0;
   std::size_t sites = 0;
+  std::size_t raw_sites = 0;
+  std::vector<std::uint64_t> pattern_weights;
+  std::uint64_t base_seed = 0;
+  std::uint64_t seed = 0;
+  std::size_t replicate = 0;
+  double planning_ms = 0.0;
+  TreeShapeStatistics shape;
 };
 
 inline std::size_t ParseSize(const char *text, const char *description) {
@@ -93,16 +115,41 @@ inline Options ParseOptions(int argc, char **argv) {
           ParseNonnegativeSize(argv[index], "conditioning duration");
     } else if (option == "--topology") {
       options.topology = argv[index];
-      if (options.topology != "balanced" && options.topology != "caterpillar") {
+      if (options.topology != "balanced" &&
+          options.topology != "caterpillar" && options.topology != "yule" &&
+          options.topology != "beta-critical" &&
+          options.topology != "uniform") {
         throw std::invalid_argument(
-            "--topology must be balanced or caterpillar");
+            "--topology must be balanced, caterpillar, yule, beta-critical, "
+            "or uniform");
       }
+    } else if (option == "--seed") {
+      options.seed = ParseNonnegativeSize(argv[index], "random seed");
+    } else if (option == "--replicates") {
+      options.replicates = ParseSize(argv[index], "replicate count");
+    } else if (option == "--replicate-start") {
+      options.replicate_start =
+          ParseNonnegativeSize(argv[index], "first replicate");
+    } else if (option == "--compress-patterns") {
+      const std::string_view value = argv[index];
+      if (value != "true" && value != "false")
+        throw std::invalid_argument("--compress-patterns must be true or false");
+      options.compress_patterns = value == "true";
     } else if (option == "--newick") {
       options.newick = argv[index];
     } else if (option == "--fasta") {
       options.fasta = argv[index];
     } else if (option == "--phylip") {
       options.phylip = argv[index];
+    } else if (option == "--pattern-weights") {
+      options.pattern_weights = argv[index];
+    } else if (option == "--dataset-label") {
+      options.dataset_label = argv[index];
+      if (options.dataset_label->empty() ||
+          options.dataset_label->find(',') != std::string::npos) {
+        throw std::invalid_argument(
+            "--dataset-label must be nonempty and contain no comma");
+      }
     } else {
       throw std::invalid_argument("unknown option " + std::string(option));
     }
@@ -115,12 +162,86 @@ inline Options ParseOptions(int argc, char **argv) {
     throw std::invalid_argument(
         "--newick and exactly one of --fasta or --phylip must be supplied "
         "together");
+  if (options.pattern_weights.has_value() && !has_alignment) {
+    throw std::invalid_argument(
+        "--pattern-weights applies only to an empirical alignment");
+  }
+  if (options.dataset_label.has_value() && !has_alignment) {
+    throw std::invalid_argument(
+        "--dataset-label applies only to an empirical alignment");
+  }
+  if (options.pattern_weights.has_value() && options.compress_patterns) {
+    throw std::invalid_argument(
+        "--pattern-weights and --compress-patterns are alternatives");
+  }
+  if (options.newick.has_value() &&
+      (options.replicates != 1 || options.replicate_start != 0)) {
+    throw std::invalid_argument(
+        "--replicates and --replicate-start apply only to synthetic trees");
+  }
   return options;
 }
 
-inline Problem MakeProblem(const Options &options) {
+inline std::vector<std::uint64_t>
+LoadPatternWeights(const std::filesystem::path &path,
+                   std::size_t expected_patterns) {
+  std::ifstream stream(path);
+  if (!stream)
+    throw std::runtime_error("failed to open " + path.string());
+  std::vector<std::uint64_t> weights;
+  std::uint64_t weight = 0;
+  while (stream >> weight) {
+    if (weight == 0)
+      throw std::invalid_argument("pattern weights must be positive");
+    weights.push_back(weight);
+  }
+  if (!stream.eof())
+    throw std::invalid_argument("pattern-weight file contains invalid text");
+  if (weights.size() != expected_patterns) {
+    throw std::invalid_argument(
+        "pattern-weight count does not match the alignment");
+  }
+  return weights;
+}
+
+inline void CompressPatterns(Problem &problem) {
+  if (problem.sites == 0 || problem.observation_nodes.empty())
+    throw std::invalid_argument("cannot compress an empty alignment");
+  const std::size_t width = problem.observation_nodes.size();
+  std::unordered_map<std::string_view, std::size_t> unique;
+  unique.reserve(problem.sites);
+  std::vector<Nucleotide> observations;
+  observations.reserve(problem.observations.size());
+  std::vector<std::uint64_t> weights;
+  weights.reserve(problem.sites);
+  for (std::size_t site = 0; site < problem.sites; ++site) {
+    const auto *data = reinterpret_cast<const char *>(
+        problem.observations.data() + site * width);
+    const std::string_view pattern(data, width * sizeof(Nucleotide));
+    const auto [iterator, inserted] = unique.emplace(pattern, weights.size());
+    if (inserted) {
+      observations.insert(observations.end(),
+                          problem.observations.begin() + site * width,
+                          problem.observations.begin() + (site + 1) * width);
+      weights.push_back(1);
+    } else {
+      ++weights[iterator->second];
+    }
+  }
+  problem.sites = weights.size();
+  problem.observations = std::move(observations);
+  problem.pattern_weights = std::move(weights);
+}
+
+inline Problem MakeProblem(const Options &options, std::size_t replicate = 0) {
+  if (replicate < options.replicate_start ||
+      replicate - options.replicate_start >= options.replicates) {
+    throw std::invalid_argument("synthetic replicate is outside the requested range");
+  }
   if (options.newick.has_value()) {
+    const Clock::time_point planning_begin = Clock::now();
     Phylogeny phylogeny = LoadNewick(*options.newick);
+    const double planning_ms = Milliseconds(planning_begin, Clock::now());
     const SequenceAlignment alignment = options.fasta.has_value()
                                             ? LoadFasta(*options.fasta)
                                             : LoadPhylip(*options.phylip);
@@ -130,70 +251,72 @@ inline Problem MakeProblem(const Options &options) {
       ++out_degree[parent];
     const std::size_t leaves = static_cast<std::size_t>(
         std::count(out_degree.begin(), out_degree.end(), std::size_t{0}));
-    return {std::move(phylogeny.plan),
-            std::move(phylogeny.branch_lengths),
-            std::move(encoded.observation_nodes),
-            std::move(encoded.observations),
-            options.newick->stem().string(),
-            "empirical",
-            leaves,
-            encoded.sites};
+    std::vector<std::uint64_t> weights =
+        options.pattern_weights.has_value()
+            ? LoadPatternWeights(*options.pattern_weights, encoded.sites)
+            : std::vector<std::uint64_t>(encoded.sites, 1);
+    std::uint64_t raw_sites = 0;
+    for (const std::uint64_t weight : weights) {
+      if (weight > std::numeric_limits<std::uint64_t>::max() - raw_sites)
+        throw std::overflow_error("total pattern weight overflows");
+      raw_sites += weight;
+    }
+    if (raw_sites > std::numeric_limits<std::size_t>::max())
+      throw std::overflow_error("total pattern weight exceeds size_t");
+    Problem result{std::move(phylogeny.plan),
+                   std::move(phylogeny.branch_lengths),
+                   std::move(encoded.observation_nodes),
+                   std::move(encoded.observations),
+                   options.dataset_label.value_or(
+                       options.newick->stem().string()),
+                   "empirical",
+                   leaves,
+                   encoded.sites,
+                   static_cast<std::size_t>(raw_sites),
+                   std::move(weights),
+                   options.seed,
+                   options.seed,
+                   0,
+                   planning_ms,
+                   {}};
+    if (options.compress_patterns)
+      CompressPatterns(result);
+    result.shape = ShapeStatistics(result.plan);
+    return result;
   }
 
   const std::size_t leaves = options.leaves;
   const std::size_t sites = options.sites;
-  if (leaves == 0 || (leaves & (leaves - 1)) != 0)
-    throw std::invalid_argument("--leaves must be a power of two");
-  if (leaves > std::numeric_limits<std::size_t>::max() / 2 + 1)
-    throw std::length_error("the requested tree is too large");
-  const std::size_t nodes = 2 * leaves - 1;
-  if (nodes - 1 > std::numeric_limits<btrc::Index>::max())
-    throw std::length_error("the requested tree exceeds the planner limit");
-  std::vector<std::int64_t> parents(nodes, -1);
-  if (options.topology == "balanced") {
-    for (std::size_t node = 1; node < nodes; ++node)
-      parents[node] = static_cast<std::int64_t>((node - 1) / 2);
-  } else {
-    if (leaves == 1) {
-      parents[0] = -1;
-    } else {
-      const std::size_t internal_nodes = leaves - 1;
-      for (std::size_t node = 1; node < internal_nodes; ++node)
-        parents[node] = static_cast<std::int64_t>(node - 1);
-      for (std::size_t leaf = 0; leaf + 2 < leaves; ++leaf) {
-        parents[internal_nodes + leaf] = static_cast<std::int64_t>(leaf);
-      }
-      parents[nodes - 2] = static_cast<std::int64_t>(internal_nodes - 1);
-      parents[nodes - 1] = static_cast<std::int64_t>(internal_nodes - 1);
-    }
-  }
-  btrc::Plan plan = btrc::MakePlan(parents);
+  const std::uint64_t seed =
+      SyntheticSeed(options.seed, leaves, sites, replicate, options.topology);
+  SyntheticTopology topology =
+      MakeSyntheticTopology(options.topology, leaves, seed);
+  const Clock::time_point planning_begin = Clock::now();
+  btrc::Plan plan = btrc::MakePlan(topology.parents);
+  const double planning_ms = Milliseconds(planning_begin, Clock::now());
   std::vector<Scalar> lengths(plan.num_edges());
   for (std::size_t edge = 0; edge < lengths.size(); ++edge)
-    lengths[edge] =
-        Scalar{0.02} + Scalar{0.001} * static_cast<Scalar>(edge % 29);
+    lengths[edge] = Scalar{0.02} + Scalar{0.18} * static_cast<Scalar>(
+                                                DeterministicRandom(seed + edge)
+                                                    .Unit());
 
-  const std::size_t first_leaf = leaves - 1;
-  std::vector<btrc::Index> observation_nodes(leaves);
-  for (std::size_t leaf = 0; leaf < leaves; ++leaf)
-    observation_nodes[leaf] = static_cast<btrc::Index>(first_leaf + leaf);
-  std::vector<Nucleotide> observations(sites * leaves);
-  constexpr std::array<Nucleotide, 4> kStates{Nucleotide::kA, Nucleotide::kC,
-                                              Nucleotide::kG, Nucleotide::kT};
-  for (std::size_t site = 0; site < sites; ++site) {
-    for (std::size_t leaf = 0; leaf < leaves; ++leaf) {
-      const std::size_t state = (site * 17 + leaf * 13 + (site ^ leaf)) % 4;
-      observations[site * leaves + leaf] = kStates[state];
-    }
-  }
-  return {std::move(plan),
-          std::move(lengths),
-          std::move(observation_nodes),
-          std::move(observations),
-          "synthetic",
-          options.topology,
-          leaves,
-          sites};
+  Problem result{std::move(plan),
+                 std::move(lengths),
+                 std::move(topology.leaves),
+                 MakeUniquePatterns(sites, leaves, seed),
+                 "synthetic",
+                 options.topology,
+                 leaves,
+                 sites,
+                 sites,
+                 std::vector<std::uint64_t>(sites, 1),
+                 options.seed,
+                 seed,
+                 replicate,
+                 planning_ms,
+                 {}};
+  result.shape = ShapeStatistics(result.plan);
+  return result;
 }
 
 inline double Median(std::vector<double> values) {
@@ -204,8 +327,26 @@ inline double Median(std::vector<double> values) {
   return 0.5 * (values[middle - 1] + values[middle]);
 }
 
-inline double Milliseconds(Clock::time_point begin, Clock::time_point end) {
-  return std::chrono::duration<double, std::milli>(end - begin).count();
+inline double Quantile(std::vector<double> values, double probability) {
+  if (values.empty() || probability < 0.0 || probability > 1.0)
+    throw std::invalid_argument("invalid benchmark quantile");
+  std::sort(values.begin(), values.end());
+  const double position = probability * static_cast<double>(values.size() - 1);
+  const std::size_t lower = static_cast<std::size_t>(position);
+  const std::size_t upper = std::min(lower + 1, values.size() - 1);
+  const double fraction = position - static_cast<double>(lower);
+  return values[lower] * (1.0 - fraction) + values[upper] * fraction;
+}
+
+inline std::string JoinSamples(const std::vector<double> &values) {
+  std::ostringstream stream;
+  stream << std::setprecision(17);
+  for (std::size_t index = 0; index < values.size(); ++index) {
+    if (index != 0)
+      stream << '|';
+    stream << values[index];
+  }
+  return stream.str();
 }
 
 struct BenchmarkResult {
@@ -215,6 +356,19 @@ struct BenchmarkResult {
   double cpu_ms = 0.0;
   double prepare_ms = 0.0;
   double total_accelerator_ms = 0.0;
+  double cpu_p25_ms = 0.0;
+  double cpu_p75_ms = 0.0;
+  double prepared_p25_ms = 0.0;
+  double prepared_p75_ms = 0.0;
+  double total_p25_ms = 0.0;
+  double total_p75_ms = 0.0;
+  std::vector<double> cpu_samples_ms;
+  std::vector<double> prepare_samples_ms;
+  std::vector<double> prepared_samples_ms;
+  std::vector<double> upload_samples_ms;
+  std::vector<double> kernel_samples_ms;
+  std::vector<double> download_samples_ms;
+  std::vector<double> total_samples_ms;
 };
 
 template <typename Cpu, typename Accelerator>
@@ -318,7 +472,20 @@ BenchmarkResult RunInterleaved(AlignmentModelView model, int repeats,
           accelerator_result.timings,
           Median(cpu_times),
           Median(prepare_times),
-          Median(total_times)};
+          Median(total_times),
+          Quantile(cpu_times, 0.25),
+          Quantile(cpu_times, 0.75),
+          Quantile(wall_times, 0.25),
+          Quantile(wall_times, 0.75),
+          Quantile(total_times, 0.25),
+          Quantile(total_times, 0.75),
+          cpu_times,
+          prepare_times,
+          wall_times,
+          upload_times,
+          kernel_times,
+          download_times,
+          total_times};
 }
 
 inline AlignmentModelView SiteBatch(AlignmentModelView model,
@@ -443,7 +610,7 @@ RunChunkedInterleaved(AlignmentModelView model, int repeats,
     double upload_elapsed = 0.0;
     double kernel_elapsed = 0.0;
     double download_elapsed = 0.0;
-    double total_elapsed = 0.0;
+    const Clock::time_point total_begin = Clock::now();
     const Clock::time_point shared_begin = Clock::now();
     internal::PrepareCategoricalShared(model, full_destination);
     prepare_elapsed += Milliseconds(shared_begin, Clock::now());
@@ -452,13 +619,11 @@ RunChunkedInterleaved(AlignmentModelView model, int repeats,
       const std::size_t count = std::min(site_batch, model.sites - first_site);
       const AlignmentModelView chunk = SiteBatch(model, first_site, count);
       const auto destination = BatchPrefix(full_destination, count);
-      const Clock::time_point total_begin = Clock::now();
-      const Clock::time_point prepare_begin = total_begin;
+      const Clock::time_point prepare_begin = Clock::now();
       const auto factors =
           internal::PrepareCategoricalObservations(chunk, destination);
       prepare_elapsed += Milliseconds(prepare_begin, Clock::now());
       const tree_hmm::PartitionView result = accelerator(factors);
-      total_elapsed += Milliseconds(total_begin, Clock::now());
       wall_elapsed += result.timings.wall_ms;
       upload_elapsed += result.timings.upload_ms;
       kernel_elapsed += result.timings.kernel_ms;
@@ -471,7 +636,7 @@ RunChunkedInterleaved(AlignmentModelView model, int repeats,
     upload_times.push_back(upload_elapsed);
     kernel_times.push_back(kernel_elapsed);
     download_times.push_back(download_elapsed);
-    total_times.push_back(total_elapsed);
+    total_times.push_back(Milliseconds(total_begin, Clock::now()));
   };
 
   ConditionInterleaved(conditioning_ms, run_cpu, run_accelerator);
@@ -498,7 +663,20 @@ RunChunkedInterleaved(AlignmentModelView model, int repeats,
            Median(wall_times)},
           Median(cpu_times),
           Median(prepare_times),
-          Median(total_times)};
+          Median(total_times),
+          Quantile(cpu_times, 0.25),
+          Quantile(cpu_times, 0.75),
+          Quantile(wall_times, 0.25),
+          Quantile(wall_times, 0.75),
+          Quantile(total_times, 0.25),
+          Quantile(total_times, 0.75),
+          cpu_times,
+          prepare_times,
+          wall_times,
+          upload_times,
+          kernel_times,
+          download_times,
+          total_times};
 }
 
 inline double MaxAbsoluteError(std::span<const Scalar> expected,
@@ -537,43 +715,95 @@ inline void PrintHeader(const char *backend, const std::string &device,
       << "# device=" << device << '\n'
       << "# dataset=" << problem.dataset << '\n'
       << "# topology=" << problem.topology << "-bifurcating-jc69\n"
-      << "# prepared calls exclude workspace allocation and warmup\n"
+      << "# timing_prepared=host wall time of one preallocated backend call; "
+         "topology planning, workspace allocation, host factor construction, "
+         "and warmup excluded\n"
+      << "# timing_resident=not measured: every public prepared call uploads "
+         "its inputs\n"
+      << "# timing_device_compute_download=kernel+result-download device events; "
+         "input upload excluded\n"
+      << "# timing_end_to_end=host factor construction+prepared call\n"
       << "# conditioning_ms=" << options.conditioning_ms << '\n'
       << "# CPU and accelerator execution order alternates by repeat\n"
-      << "backend,precision,dataset,topology,leaves,nodes,sites,site_batch,"
-         "primitive_levels,repeats,conditioning_ms,"
-         "cpu_ms,prepare_ms,accelerator_wall_ms,upload_ms,kernel_ms,"
-         "download_ms,total_accelerator_ms,wall_speedup,"
+      << "backend,precision,dataset,topology,seed_base,seed,replicate,leaves,nodes,"
+         "sites,unique_patterns,site_batch,binary_tree,tree_height,sackin_index,"
+         "colless_index,normalized_colless,structural_rounds,"
+         "primitive_levels,primitive_operations,planning_ms,staged_input_bytes,"
+         "repeats,conditioning_ms,cpu_ms,cpu_p25_ms,cpu_p75_ms,prepare_ms,"
+         "prepared_ms,prepared_p25_ms,prepared_p75_ms,resident_ms,"
+         "device_compute_download_ms,upload_ms,kernel_ms,download_ms,"
+         "end_to_end_ms,end_to_end_p25_ms,"
+         "end_to_end_p75_ms,end_to_end_speedup,prepared_speedup,"
          "cpu_log_likelihood,accelerator_log_likelihood,max_abs_error,"
-         "max_relative_error\n";
+         "max_relative_error,cpu_samples_ms,prepare_samples_ms,"
+         "prepared_samples_ms,upload_samples_ms,kernel_samples_ms,"
+         "download_samples_ms,end_to_end_samples_ms\n";
   static_cast<void>(statistics);
 }
 
 inline void PrintRow(const char *backend, const Options &options,
-                     const Problem &problem, double cpu_ms, double prepare_ms,
-                     const tree_hmm::AcceleratorTimings &accelerator,
-                     double total_accelerator_ms,
-                     std::span<const Scalar> cpu_values,
-                     std::span<const Scalar> accelerator_values,
+                     const Problem &problem, const BenchmarkResult &result,
                      double absolute_error, double relative_error) {
+  const double cpu_ms = result.cpu_ms;
+  const double prepare_ms = result.prepare_ms;
+  const tree_hmm::AcceleratorTimings &accelerator = result.accelerator_timings;
+  const double total_accelerator_ms = result.total_accelerator_ms;
   const btrc::PlanStatistics statistics = btrc::Statistics(problem.plan);
+  const std::size_t site_batch =
+      options.site_batch == 0 ? problem.sites
+                              : std::min(options.site_batch, problem.sites);
+  const std::size_t input_bytes =
+      site_batch * problem.observation_nodes.size() * sizeof(Nucleotide) +
+      problem.plan.num_edges() * 16 * sizeof(Scalar) +
+      problem.observation_nodes.size() * sizeof(btrc::Index) +
+      (4 + 16 * 4) * sizeof(Scalar);
+  const std::size_t primitive_operations =
+      statistics.rakes + problem.plan.num_branch_combinations() +
+      problem.plan.num_branch_absorptions() + statistics.compressions;
+  const auto weighted_sum = [&](std::span<const Scalar> values) {
+    if (values.size() != problem.pattern_weights.size())
+      throw std::invalid_argument("benchmark likelihood weights have a wrong shape");
+    double result = 0.0;
+    for (std::size_t pattern = 0; pattern < values.size(); ++pattern) {
+      result += static_cast<double>(problem.pattern_weights[pattern]) *
+                static_cast<double>(values[pattern]);
+    }
+    return result;
+  };
   std::cout << std::setprecision(10) << backend << ','
             << tree_hmm::kPrecisionName << ',' << problem.dataset << ','
-            << problem.topology << ',' << problem.leaves << ','
-            << problem.plan.num_nodes() << ',' << problem.sites << ','
-            << (options.site_batch == 0
-                    ? problem.sites
-                    : std::min(options.site_batch, problem.sites))
-            << ',' << statistics.primitive_levels << ',' << options.repeats
-            << ',' << options.conditioning_ms << ',' << cpu_ms << ','
+            << problem.topology << ',' << problem.base_seed << ','
+            << problem.seed << ','
+            << problem.replicate << ',' << problem.leaves << ','
+            << problem.plan.num_nodes() << ',' << problem.raw_sites << ','
+            << problem.sites << ',' << site_batch << ','
+            << (problem.shape.binary ? 1 : 0) << ',' << problem.shape.height
+            << ',' << problem.shape.sackin << ','
+            << problem.shape.colless << ','
+            << problem.shape.normalized_colless << ',' << statistics.rounds
+            << ',' << statistics.primitive_levels << ','
+            << primitive_operations << ',' << problem.planning_ms << ','
+            << input_bytes << ',' << options.repeats << ','
+            << options.conditioning_ms << ',' << cpu_ms << ','
+            << result.cpu_p25_ms << ',' << result.cpu_p75_ms << ','
             << prepare_ms << ',' << accelerator.wall_ms << ','
+            << result.prepared_p25_ms << ',' << result.prepared_p75_ms << ','
+            << ',' << accelerator.kernel_ms + accelerator.download_ms << ','
             << accelerator.upload_ms << ',' << accelerator.kernel_ms << ','
             << accelerator.download_ms << ',' << total_accelerator_ms << ','
+            << result.total_p25_ms << ',' << result.total_p75_ms << ','
             << cpu_ms / total_accelerator_ms << ','
-            << std::accumulate(cpu_values.begin(), cpu_values.end(), 0.0) << ','
-            << std::accumulate(accelerator_values.begin(),
-                               accelerator_values.end(), 0.0)
-            << ',' << absolute_error << ',' << relative_error << '\n';
+            << cpu_ms / accelerator.wall_ms << ','
+            << weighted_sum(result.cpu_values) << ','
+            << weighted_sum(result.accelerator_values)
+            << ',' << absolute_error << ',' << relative_error << ','
+            << JoinSamples(result.cpu_samples_ms) << ','
+            << JoinSamples(result.prepare_samples_ms) << ','
+            << JoinSamples(result.prepared_samples_ms) << ','
+            << JoinSamples(result.upload_samples_ms) << ','
+            << JoinSamples(result.kernel_samples_ms) << ','
+            << JoinSamples(result.download_samples_ms) << ','
+            << JoinSamples(result.total_samples_ms) << '\n';
 }
 
 } // namespace parallel_phylogenetics::benchmark

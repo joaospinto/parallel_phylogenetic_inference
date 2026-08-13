@@ -105,7 +105,7 @@ if [[ "${#benchmark_sections[@]}" -eq 0 ]]; then
 fi
 for section in "${benchmark_sections[@]}"; do
   case "${section}" in
-    validation|synthetic|fish|pandit) ;;
+    validation|synthetic|distributions|tasks|fish|pandit) ;;
     *)
       echo "TREE_HMM_BENCHMARK_SECTIONS contains unsupported section ${section}" >&2
       exit 2
@@ -271,7 +271,8 @@ fi
 
 if [[ "${TREE_HMM_SKIP_BENCHMARKS:-0}" != "1" &&
       "${TREE_HMM_SKIP_BEAGLE:-0}" != "1" ]] &&
-   { section_selected synthetic || section_selected fish ||
+   { section_selected synthetic || section_selected distributions ||
+     section_selected fish ||
      section_selected pandit; }; then
   beagle_build_backend=cpu
   if [[ "${accelerator_backend}" == cuda ]]; then
@@ -280,6 +281,8 @@ if [[ "${TREE_HMM_SKIP_BENCHMARKS:-0}" != "1" &&
   beagle_prefix="${notebook_work_dir}/beagle-4.0.1-${beagle_build_backend}"
   BEAGLE_BUILD_BACKEND="${beagle_build_backend}" \
     bash "${repo_dir}/scripts/install_beagle.sh" "${beagle_prefix}"
+  echo "=== BEAGLE source and build identity ==="
+  cat "${beagle_prefix}/BEAGLE_BUILD_METADATA.txt"
   export BEAGLE_PREFIX="${beagle_prefix}"
   # shellcheck source=scripts/beagle_environment.sh
   source "${repo_dir}/scripts/beagle_environment.sh"
@@ -411,6 +414,31 @@ for precision in "${precisions[@]}"; do
       done
     fi
 
+  fi
+
+  if benchmark_section_enabled distributions; then
+    echo "=== ${precision} prespecified topology-distribution study ==="
+    PRECISION="${precision_config}" \
+      TREE_HMM_RESUME_REPORT="${resume_report}" \
+      bash "${repo_dir}/scripts/benchmark_synthetic_distributions.sh" \
+        "${accelerator_backend}"
+    if [[ "${TREE_HMM_SKIP_BEAGLE:-0}" != "1" ]]; then
+      for resource in "${beagle_resources[@]}"; do
+        PRECISION="${precision_config}" \
+          TREE_HMM_RESUME_REPORT="${resume_report}" \
+          bash "${repo_dir}/scripts/benchmark_synthetic_distributions.sh" \
+            "beagle-${resource}"
+      done
+    fi
+  fi
+
+  if benchmark_section_enabled tasks; then
+    echo "=== ${precision} representative inference-task timings ==="
+    tasks_benchmark="${accelerator_backend}_tasks_benchmark"
+    "${bazel_command}" build "${precision_args[@]}" \
+      "${accelerator_args[@]}" "//:${tasks_benchmark}"
+    "bazel-bin/${tasks_benchmark}" --topology yule --leaves 2048 \
+      --sites 256 --seed 20260813 --replicates 10 --repeats "${repeats}"
   fi
 
   if benchmark_section_enabled fish &&

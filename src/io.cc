@@ -335,6 +335,7 @@ SequenceAlignment ParsePhylip(std::string_view text) {
   SequenceAlignment result;
   result.sites = expected_sites;
   result.records.reserve(expected_records);
+  std::vector<std::string_view> lines;
   std::size_t position = header_end + 1;
   while (position <= text.size()) {
     const std::size_t end = text.find('\n', position);
@@ -344,29 +345,51 @@ SequenceAlignment ParsePhylip(std::string_view text) {
     if (!line.empty() && line.back() == '\r')
       line.remove_suffix(1);
     const std::size_t name_begin = line.find_first_not_of(" \t");
-    if (name_begin != std::string_view::npos) {
-      const std::size_t name_end = line.find_first_of(" \t", name_begin);
-      if (name_end == std::string_view::npos)
-        throw std::invalid_argument("PHYLIP record has no sequence");
-      SequenceRecord record{
-          std::string(line.substr(name_begin, name_end - name_begin)), {}};
-      record.sequence.reserve(expected_sites);
-      for (const char character : line.substr(name_end)) {
-        if (std::isspace(static_cast<unsigned char>(character)))
-          continue;
-        static_cast<void>(Decode(character));
-        record.sequence.push_back(static_cast<char>(
-            std::toupper(static_cast<unsigned char>(character))));
-      }
-      result.records.push_back(std::move(record));
-    }
+    if (name_begin != std::string_view::npos)
+      lines.push_back(line.substr(name_begin));
     if (end == std::string_view::npos)
       break;
     position = end + 1;
   }
-  if (result.records.size() != expected_records) {
+  if (lines.size() < expected_records) {
     throw std::invalid_argument(
         "PHYLIP record count does not match its header");
+  }
+
+  const auto append_sequence = [&](SequenceRecord &record,
+                                   std::string_view sequence) {
+    for (const char character : sequence) {
+      if (std::isspace(static_cast<unsigned char>(character)))
+        continue;
+      static_cast<void>(Decode(character));
+      record.sequence.push_back(static_cast<char>(
+          std::toupper(static_cast<unsigned char>(character))));
+      if (record.sequence.size() > expected_sites) {
+        throw std::invalid_argument(
+            "PHYLIP sequence is longer than its header declares");
+      }
+    }
+  };
+  for (std::size_t record = 0; record < expected_records; ++record) {
+    const std::string_view line = lines[record];
+    const std::size_t name_end = line.find_first_of(" \t");
+    if (name_end == std::string_view::npos)
+      throw std::invalid_argument("PHYLIP record has no sequence");
+    result.records.push_back({std::string(line.substr(0, name_end)), {}});
+    result.records.back().sequence.reserve(expected_sites);
+    append_sequence(result.records.back(), line.substr(name_end));
+  }
+  for (std::size_t line_index = expected_records; line_index < lines.size();
+       ++line_index) {
+    const std::size_t record =
+        (line_index - expected_records) % expected_records;
+    std::string_view sequence = lines[line_index];
+    const std::size_t first_end = sequence.find_first_of(" \t");
+    if (first_end != std::string_view::npos &&
+        sequence.substr(0, first_end) == result.records[record].name) {
+      sequence.remove_prefix(first_end);
+    }
+    append_sequence(result.records[record], sequence);
   }
   ValidateAlignment(result, "PHYLIP");
   return result;

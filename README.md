@@ -143,8 +143,8 @@ TREE_HMM_BUILD_BACKENDS=rocm TREE_HMM_RUN_BACKENDS=none \
   TREE_HMM_ROCM_ARCH=gfx942 scripts/accelerator_driver.sh
 ```
 
-All three benchmark binaries accept empirical FASTA or relaxed sequential PHYLIP
-alignments:
+All three benchmark binaries accept empirical FASTA or relaxed sequential or
+interleaved PHYLIP alignments:
 
 ```sh
 bazel run //:metal_benchmark --config=fp32 -- \
@@ -169,7 +169,12 @@ PRECISION=fp64 scripts/benchmark_beagle.sh \
 On Linux, `scripts/install_beagle.sh` checksum-verifies and builds the pinned
 BEAGLE 4.0.1 release for the CPU and, when requested, with its CUDA plugin. The
 optional local dependency is discovered through `BEAGLE_PREFIX`; ordinary
-Bazel targets remain buildable when BEAGLE is absent.
+Bazel targets remain buildable when BEAGLE is absent. Exact alternative source
+commits can be selected with `BEAGLE_VERSION_LABEL`,
+`BEAGLE_SOURCE_REVISION`, `BEAGLE_SOURCE_URL`, and
+`BEAGLE_SOURCE_SHA256`; the installer records those values and its CMake flags
+in `BEAGLE_BUILD_METADATA.txt`. A development branch is never silently
+reported as a numbered release.
 
 Warmup and workspace allocation are excluded. CPU and accelerator execution
 order alternates between repetitions to reduce order bias. The standard Metal
@@ -178,6 +183,30 @@ before each case to reduce thermal-state bias on passively cooled systems. The
 reported total accelerator time includes conversion from the phylogenetic
 model to generic tree-HMM factors, host/device transfer, kernel execution, and
 result transfer.
+
+The distribution study is a prespecified Cartesian product of taxa and unique
+pattern counts over deterministic replicates of Yule, critical beta-splitting,
+uniform/PDA, and caterpillar trees. Its synthetic patterns are distinct
+performance inputs, not draws from JC69. Raw repeats and tree-shape, planning,
+batch, and input-size metadata are retained in every CSV row:
+
+```sh
+PRECISION=fp32 scripts/benchmark_synthetic_distributions.sh cuda
+PRECISION=fp32 TREE_HMM_BENCHMARK_MODE=factor-update \
+  BEAGLE_THREADS=1 scripts/benchmark_synthetic_distributions.sh beagle-cpu
+scripts/plot_synthetic_study.py native.log beagle.log \
+  --native cuda --baseline beagle-cpu --precision FP32 \
+  --benchmark-mode factor-update --output-directory figures
+```
+
+BEAGLE rows distinguish `fixed-model` (all observations and numerical factors
+already installed), `factor-update` (observations retained while JC69 factors
+and transition matrices are refreshed), and `full-input-update` (tips, pattern
+weights, and factors refreshed). The modes are never combined into one
+speedup. `cuda_tasks_benchmark`, `rocm_tasks_benchmark`, and
+`metal_tasks_benchmark` separately time likelihoods, all node and edge
+marginals, joint MAP assignments, and posterior samples through the public
+prepared APIs.
 
 ## Public data
 
@@ -262,6 +291,24 @@ any subset without duplicating orchestration, for example
 `TREE_HMM_PRECISIONS_OVERRIDE=FP32`. Existing `TREE_HMM_SKIP_*` controls,
 repeat-count overrides, sanitizer controls, and memory-guard overrides remain
 available.
+
+For a prespecified broad empirical cohort,
+`scripts/prepare_dryad_corpus.py` imports all 222 DNA alignments in Dryad
+10.5061/dryad.8gtht76zz. For each alignment it selects the maximum finite
+log-likelihood row among `version == "standard"` in the corresponding
+`pars_summary.parquet`, verifies exact tree/alignment taxon agreement, performs
+exact duplicate-column compression, and records source and normalized hashes.
+Selection is independent of benchmark timing. PyArrow is needed only while
+creating this compact manifest; benchmark runtime remains dependency-free.
+`scripts/benchmark_empirical_manifest.sh` consumes the resulting manifest.
+
+`scripts/prepare_ltplus.sh` checksum-verifies the official February 2026
+LTPlus tree and alignment and invokes a two-pass streaming preparation. It
+never materializes the 23 GB FASTA: the first pass records per-coordinate
+coverage and observed bases, and the second emits positions with at least 50%
+unambiguous coverage and at least two observed bases. The exact rule, coverage
+distribution, input hashes, label normalization, and one-to-one taxon check
+are recorded in the output manifest.
 
 No GitHub remote or push is required for that workflow.
 

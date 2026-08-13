@@ -47,6 +47,26 @@ benchmark_resume_validation_completed "${report}" FP64
 
 work_directory="$(mktemp -d "${TMPDIR:-/tmp}/benchmark-shell-test.XXXXXX")"
 trap 'rm -rf "${work_directory}"' EXIT
+new_report="${work_directory}/new-report.txt"
+cat > "${new_report}" <<'EOF'
+backend,precision,dataset,topology,seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,site_batch
+cuda,FP32,synthetic,yule,20260813,91,0,128,255,64,64,64
+cuda,FP32,synthetic,yule,20260813,92,2,128,255,64,64,64
+baseline,beagle_resource,precision,benchmark_mode,dataset,topology,seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,site_batch,threads
+beagle,cuda,FP32,factor-update,synthetic,yule,20260813,91,0,128,255,64,64,64,1
+EOF
+benchmark_resume_synthetic_replicate_completed "${new_report}" cuda FP32 \
+  yule 128 64 20260813 0
+! benchmark_resume_synthetic_replicate_completed "${new_report}" cuda FP32 \
+  yule 128 64 20260813 1
+benchmark_resume_synthetic_replicate_completed "${new_report}" cuda FP32 \
+  yule 128 64 20260813 2
+benchmark_resume_synthetic_replicate_completed "${new_report}" beagle-cuda \
+  FP32 yule 128 64 20260813 0 factor-update 1
+! benchmark_resume_synthetic_replicate_completed "${new_report}" beagle-cuda \
+  FP32 yule 128 64 20260813 0 fixed-model 1
+! benchmark_resume_synthetic_replicate_completed "${new_report}" beagle-cuda \
+  FP32 yule 128 64 20260813 0 factor-update 2
 mock_rocm="${work_directory}/rocm"
 mkdir -p "${mock_rocm}/bin" "${mock_rocm}/lib"
 printf '%s\n' '#!/usr/bin/env bash' 'echo "  Name: gfx942"' > \

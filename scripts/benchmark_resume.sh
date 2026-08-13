@@ -17,17 +17,95 @@ benchmark_resume_case_completed() {
     -v dataset="${dataset}" -v topology="${topology}" \
     -v leaves="${leaves}" -v sites="${sites}" \
     -v site_batch="${site_batch}" '
+      $1 == "backend" && $2 == "precision" {
+        delete column
+        for (field_index = 1; field_index <= NF; ++field_index) column[$(field_index)] = field_index
+        kind = "native"
+        next
+      }
+      $1 == "baseline" && $2 == "beagle_resource" {
+        delete column
+        for (field_index = 1; field_index <= NF; ++field_index) column[$(field_index)] = field_index
+        kind = "beagle"
+        next
+      }
       method == "cuda" || method == "rocm" || method == "metal" {
-        if ($1 == method && $2 == precision && $3 == dataset &&
-            $4 == topology && $5 == leaves && $7 == sites &&
-            $8 == site_batch) found = 1
+        if (kind == "native" && $(column["backend"]) == method &&
+            $(column["precision"]) == precision &&
+            $(column["dataset"]) == dataset &&
+            $(column["topology"]) == topology &&
+            $(column["leaves"]) == leaves &&
+            $(column["sites"]) == sites &&
+            $(column["site_batch"]) == site_batch) found = 1
+        else if (kind == "" && $1 == method && $2 == precision &&
+                 $3 == dataset && $4 == topology && $5 == leaves &&
+                 $7 == sites && $8 == site_batch) found = 1
         next
       }
       {
         resource = substr(method, 8)
-        if ($1 == "beagle" && $2 == resource && $3 == precision &&
-            $4 == dataset && $5 == topology && $6 == leaves &&
-            $8 == sites && $9 == site_batch) found = 1
+        if (kind == "beagle" && $(column["baseline"]) == "beagle" &&
+            $(column["beagle_resource"]) == resource &&
+            $(column["precision"]) == precision &&
+            $(column["dataset"]) == dataset &&
+            $(column["topology"]) == topology &&
+            $(column["leaves"]) == leaves && $(column["sites"]) == sites &&
+            $(column["site_batch"]) == site_batch) found = 1
+        else if (kind == "" && $1 == "beagle" && $2 == resource &&
+                 $3 == precision && $4 == dataset && $5 == topology &&
+                 $6 == leaves && $8 == sites && $9 == site_batch) found = 1
+      }
+      END { exit !found }
+    ' "${report}"
+}
+
+benchmark_resume_synthetic_replicate_completed() {
+  local report="$1"
+  local method="$2"
+  local precision="$3"
+  local topology="$4"
+  local leaves="$5"
+  local patterns="$6"
+  local seed_base="$7"
+  local replicate="$8"
+  local benchmark_mode="${9:-}"
+  local threads="${10:-}"
+  [[ -n "${report}" && -r "${report}" ]] || return 1
+  awk -F, -v method="${method}" -v precision="${precision}" \
+    -v topology="${topology}" -v leaves="${leaves}" \
+    -v patterns="${patterns}" -v seed_base="${seed_base}" \
+    -v replicate="${replicate}" -v benchmark_mode="${benchmark_mode}" \
+    -v threads="${threads}" '
+      $1 == "backend" && $2 == "precision" {
+        delete column
+        for (field_index = 1; field_index <= NF; ++field_index) column[$(field_index)] = field_index
+        kind = "native"
+        next
+      }
+      $1 == "baseline" && $2 == "beagle_resource" {
+        delete column
+        for (field_index = 1; field_index <= NF; ++field_index) column[$(field_index)] = field_index
+        kind = "beagle"
+        next
+      }
+      {
+        resource = substr(method, 8)
+        matching_method = ((kind == "native" &&
+                            $(column["backend"]) == method) ||
+                           (kind == "beagle" &&
+                            $(column["baseline"]) == "beagle" &&
+                            $(column["beagle_resource"]) == resource))
+        if (matching_method && $(column["precision"]) == precision &&
+            $(column["dataset"]) == "synthetic" &&
+            $(column["topology"]) == topology &&
+            $(column["leaves"]) == leaves &&
+            $(column["unique_patterns"]) == patterns &&
+            $(column["seed_base"]) == seed_base &&
+            $(column["replicate"]) == replicate &&
+            (benchmark_mode == "" || !("benchmark_mode" in column) ||
+             $(column["benchmark_mode"]) == benchmark_mode) &&
+            (threads == "" || !("threads" in column) ||
+             $(column["threads"]) == threads)) found = 1
       }
       END { exit !found }
     ' "${report}"
@@ -42,15 +120,36 @@ benchmark_resume_dataset_batch_completed() {
   [[ -n "${report}" && -r "${report}" ]] || return 1
   awk -F, -v method="${method}" -v precision="${precision}" \
     -v dataset="${dataset}" -v site_batch="${site_batch}" '
+      $1 == "backend" && $2 == "precision" {
+        delete column
+        for (field_index = 1; field_index <= NF; ++field_index) column[$(field_index)] = field_index
+        kind = "native"
+        next
+      }
+      $1 == "baseline" && $2 == "beagle_resource" {
+        delete column
+        for (field_index = 1; field_index <= NF; ++field_index) column[$(field_index)] = field_index
+        kind = "beagle"
+        next
+      }
       method == "cuda" || method == "rocm" || method == "metal" {
-        if ($1 == method && $2 == precision && $3 == dataset &&
-            $8 == site_batch) found = 1
+        if (kind == "native" && $(column["backend"]) == method &&
+            $(column["precision"]) == precision &&
+            $(column["dataset"]) == dataset &&
+            $(column["site_batch"]) == site_batch) found = 1
+        else if (kind == "" && $1 == method && $2 == precision &&
+                 $3 == dataset && $8 == site_batch) found = 1
         next
       }
       {
         resource = substr(method, 8)
-        if ($1 == "beagle" && $2 == resource && $3 == precision &&
-            $4 == dataset && $9 == site_batch) found = 1
+        if (kind == "beagle" && $(column["baseline"]) == "beagle" &&
+            $(column["beagle_resource"]) == resource &&
+            $(column["precision"]) == precision &&
+            $(column["dataset"]) == dataset &&
+            $(column["site_batch"]) == site_batch) found = 1
+        else if (kind == "" && $1 == "beagle" && $2 == resource &&
+                 $3 == precision && $4 == dataset && $9 == site_batch) found = 1
       }
       END { exit !found }
     ' "${report}"
@@ -61,17 +160,44 @@ benchmark_resume_dataset_completed() {
   local method="$2"
   local precision="$3"
   local dataset="$4"
+  local benchmark_mode="${5:-}"
+  local threads="${6:-}"
   [[ -n "${report}" && -r "${report}" ]] || return 1
   awk -F, -v method="${method}" -v precision="${precision}" \
-    -v dataset="${dataset}" '
+    -v dataset="${dataset}" -v benchmark_mode="${benchmark_mode}" \
+    -v threads="${threads}" '
+      $1 == "backend" && $2 == "precision" {
+        delete column
+        for (field_index = 1; field_index <= NF; ++field_index) column[$(field_index)] = field_index
+        kind = "native"
+        next
+      }
+      $1 == "baseline" && $2 == "beagle_resource" {
+        delete column
+        for (field_index = 1; field_index <= NF; ++field_index) column[$(field_index)] = field_index
+        kind = "beagle"
+        next
+      }
       method == "cuda" || method == "rocm" || method == "metal" {
-        if ($1 == method && $2 == precision && $3 == dataset) found = 1
+        if (kind == "native" && $(column["backend"]) == method &&
+            $(column["precision"]) == precision &&
+            $(column["dataset"]) == dataset) found = 1
+        else if (kind == "" && $1 == method && $2 == precision &&
+                 $3 == dataset) found = 1
         next
       }
       {
         resource = substr(method, 8)
-        if ($1 == "beagle" && $2 == resource && $3 == precision &&
-            $4 == dataset) found = 1
+        if (kind == "beagle" && $(column["baseline"]) == "beagle" &&
+            $(column["beagle_resource"]) == resource &&
+            $(column["precision"]) == precision &&
+            $(column["dataset"]) == dataset &&
+            (benchmark_mode == "" || !("benchmark_mode" in column) ||
+             $(column["benchmark_mode"]) == benchmark_mode) &&
+            (threads == "" || !("threads" in column) ||
+             $(column["threads"]) == threads)) found = 1
+        else if (kind == "" && $1 == "beagle" && $2 == resource &&
+                 $3 == precision && $4 == dataset) found = 1
       }
       END { exit !found }
     ' "${report}"

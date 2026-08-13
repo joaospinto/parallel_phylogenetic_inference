@@ -44,8 +44,8 @@ Phylogeny LoadNewick(const std::filesystem::path &path);
 SequenceAlignment ParseFasta(std::string_view text);
 SequenceAlignment LoadFasta(const std::filesystem::path &path);
 
-// Parses relaxed sequential PHYLIP: the header gives record and site counts,
-// and each following nonempty line contains one name and its full sequence.
+// Parses relaxed sequential or interleaved PHYLIP. Continuation blocks may
+// omit taxon names or repeat the names in the first block's order.
 SequenceAlignment ParsePhylip(std::string_view text);
 SequenceAlignment LoadPhylip(const std::filesystem::path &path);
 
