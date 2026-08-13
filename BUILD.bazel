@@ -9,6 +9,7 @@ sh_test(
     srcs = ["tests/benchmark_shell_test.sh"],
     data = [
         "scripts/accelerator_environment.sh",
+        "scripts/beagle_environment.sh",
         "scripts/benchmark_empirical_manifest.sh",
         "scripts/benchmark_jc69_simulations.sh",
         "scripts/benchmark_resume.sh",

@@ -19,14 +19,6 @@ manifest="$(cd "$(dirname "${manifest_argument}")" && pwd)/$(
 root="$(dirname "${manifest}")"
 repository="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 script_directory="${repository}/scripts"
-if [[ "${method}" == beagle-* ]]; then
-  # A parent macOS shell cannot reliably pass DYLD_LIBRARY_PATH through a new
-  # /bin/bash process. Configure the runtime in the process that launches the
-  # benchmark children.
-  # shellcheck source=scripts/beagle_environment.sh
-  source "${script_directory}/beagle_environment.sh"
-  parallel_phylogenetics_configure_beagle
-fi
 # shellcheck source=scripts/benchmark_resume.sh
 source "${script_directory}/benchmark_resume.sh"
 # shellcheck source=scripts/capacity_bounded.sh
@@ -68,6 +60,19 @@ done
   echo "TREE_HMM_DRY_RUN must be 0 or 1" >&2
   exit 2
 }
+if [[ "${dry_run}" == 0 ]]; then
+  for specification in "${method_specs[@]}"; do
+    if [[ "${specification}" == beagle-* ]]; then
+      # A parent macOS shell cannot reliably pass DYLD_LIBRARY_PATH through a
+      # new /bin/bash process. Configure the runtime in the process that
+      # launches the benchmark children. Dry runs need no BEAGLE installation.
+      # shellcheck source=scripts/beagle_environment.sh
+      source "${script_directory}/beagle_environment.sh"
+      parallel_phylogenetics_configure_beagle
+      break
+    fi
+  done
+fi
 awk -v value="${minimum_branch_length}" \
   'BEGIN { exit !(value + 0 >= 0) }' || {
   echo "TREE_HMM_EMPIRICAL_MINIMUM_BRANCH_LENGTH must be nonnegative" >&2
