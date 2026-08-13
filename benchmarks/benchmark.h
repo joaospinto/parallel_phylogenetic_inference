@@ -2,6 +2,7 @@
 #define PARALLEL_PHYLOGENETICS_BENCHMARK_H_
 
 #include "parallel_phylogenetics/alignment.h"
+#include "src/alignment_internal.h"
 #include "parallel_phylogenetics/io.h"
 
 #include <algorithm>
@@ -443,6 +444,9 @@ RunChunkedInterleaved(AlignmentModelView model, int repeats,
     double kernel_elapsed = 0.0;
     double download_elapsed = 0.0;
     double total_elapsed = 0.0;
+    const Clock::time_point shared_begin = Clock::now();
+    internal::PrepareCategoricalShared(model, full_destination);
+    prepare_elapsed += Milliseconds(shared_begin, Clock::now());
     for (std::size_t first_site = 0; first_site < model.sites;
          first_site += site_batch) {
       const std::size_t count = std::min(site_batch, model.sites - first_site);
@@ -450,7 +454,8 @@ RunChunkedInterleaved(AlignmentModelView model, int repeats,
       const auto destination = BatchPrefix(full_destination, count);
       const Clock::time_point total_begin = Clock::now();
       const Clock::time_point prepare_begin = total_begin;
-      const auto factors = Prepare(chunk, destination);
+      const auto factors =
+          internal::PrepareCategoricalObservations(chunk, destination);
       prepare_elapsed += Milliseconds(prepare_begin, Clock::now());
       const tree_hmm::PartitionView result = accelerator(factors);
       total_elapsed += Milliseconds(total_begin, Clock::now());

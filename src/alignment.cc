@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+#include "src/alignment_internal.h"
+
 namespace parallel_phylogenetics {
 
 struct AlignmentWorkspace::Impl {
@@ -205,30 +207,31 @@ Prepare(AlignmentModelView model,
 tree_hmm::BatchedCategoricalModelView
 Prepare(AlignmentModelView model,
         tree_hmm::MutableBatchedCategoricalModelView destination) {
+  internal::PrepareCategoricalShared(model, destination);
+  return internal::PrepareCategoricalObservations(model, destination);
+}
+
+namespace internal {
+
+void PrepareCategoricalShared(
+    AlignmentModelView model,
+    tree_hmm::MutableBatchedCategoricalModelView destination) {
   ValidateModel(model);
   constexpr std::size_t kCategories = 16;
-  const std::size_t expected_observations = CheckedProduct(
-      {model.sites, model.observation_nodes.size()}, "observations");
   const std::size_t expected_edges = CheckedProduct(
       {model.plan.num_edges(), std::size_t{16}}, "alignment edge factors");
   if (&destination.plan != &model.plan || destination.states != 4 ||
-      destination.batch != model.sites ||
       destination.categories != kCategories ||
       !std::equal(destination.observation_nodes.begin(),
                   destination.observation_nodes.end(),
                   model.observation_nodes.begin(),
                   model.observation_nodes.end()) ||
-      destination.observations.size() != expected_observations ||
       destination.root_potential.size() != 4 ||
       destination.emission_potentials.size() != kCategories * 4 ||
       destination.edge_potentials.size() != expected_edges) {
     throw std::invalid_argument(
-        "categorical alignment factors do not match the destination model "
-        "view");
+        "shared categorical alignment factors do not match the destination");
   }
-  static_assert(sizeof(Nucleotide) == sizeof(std::uint8_t));
-  std::memcpy(destination.observations.data(), model.observations.data(),
-              model.observations.size_bytes());
   std::transform(model.root_frequencies.begin(), model.root_frequencies.end(),
                  destination.root_potential.begin(),
                  [](Scalar value) { return static_cast<Scalar>(value); });
@@ -245,8 +248,30 @@ Prepare(AlignmentModelView model,
                    destination.edge_potentials.begin() + edge * 16,
                    [](Scalar value) { return static_cast<Scalar>(value); });
   }
+}
+
+tree_hmm::BatchedCategoricalModelView PrepareCategoricalObservations(
+    AlignmentModelView model,
+    tree_hmm::MutableBatchedCategoricalModelView destination) {
+  const std::size_t expected_observations = CheckedProduct(
+      {model.sites, model.observation_nodes.size()}, "observations");
+  if (&destination.plan != &model.plan || destination.states != 4 ||
+      destination.batch != model.sites ||
+      !std::equal(destination.observation_nodes.begin(),
+                  destination.observation_nodes.end(),
+                  model.observation_nodes.begin(),
+                  model.observation_nodes.end()) ||
+      destination.observations.size() != expected_observations) {
+    throw std::invalid_argument(
+        "categorical alignment observations do not match the destination");
+  }
+  static_assert(sizeof(Nucleotide) == sizeof(std::uint8_t));
+  std::memcpy(destination.observations.data(), model.observations.data(),
+              model.observations.size_bytes());
   return destination;
 }
+
+} // namespace internal
 
 SequentialWorkspace::SequentialWorkspace() : impl_(std::make_unique<Impl>()) {}
 SequentialWorkspace::~SequentialWorkspace() = default;

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "parallel_phylogenetics/alignment.h"
+#include "src/alignment_internal.h"
 
 namespace parallel_phylogenetics::internal {
 
@@ -129,12 +130,13 @@ LogLikelihoodsPrepared(AlignmentModelView model, std::size_t batch_capacity,
     throw std::invalid_argument(
         "phylogenetic accelerator workspace has the wrong capacity");
   }
+  PrepareCategoricalShared(model, destination);
   for (std::size_t first_site = 0; first_site < model.sites;
        first_site += batch_capacity) {
     const std::size_t count =
         std::min(batch_capacity, model.sites - first_site);
-    const auto factors = Prepare(SelectSites(model, first_site, count),
-                                 BatchPrefix(destination, count));
+    const auto factors = PrepareCategoricalObservations(
+        SelectSites(model, first_site, count), BatchPrefix(destination, count));
     const tree_hmm::PartitionView result = evaluate(factors);
     if (result.values.size() != count)
       throw std::runtime_error("tree-HMM backend returned a wrong batch size");

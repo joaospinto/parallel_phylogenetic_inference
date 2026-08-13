@@ -364,17 +364,21 @@ public:
                 "beagleSetPatternWeights");
   }
 
-  BeagleEvaluation Evaluate(AlignmentModelView model, bool update_tips) {
-    const Clock::time_point total_begin = Clock::now();
-    if (update_tips)
-      SetTipPartials(model);
-    const Clock::time_point tip_end = Clock::now();
+  double UpdateTransitionMatrices() {
+    const Clock::time_point begin = Clock::now();
     CheckBeagle(beagleUpdateTransitionMatrices(
                     instance_->get(), 0, tree_.matrix_indices.data(), nullptr,
                     nullptr, tree_.edge_lengths.data(),
                     CheckedInt(tree_.matrix_indices.size(), "matrix count")),
                 "beagleUpdateTransitionMatrices");
-    const Clock::time_point transition_end = Clock::now();
+    return Milliseconds(begin, Clock::now());
+  }
+
+  BeagleEvaluation Evaluate(AlignmentModelView model, bool update_tips) {
+    const Clock::time_point total_begin = Clock::now();
+    if (update_tips)
+      SetTipPartials(model);
+    const Clock::time_point tip_end = Clock::now();
     CheckBeagle(beagleUpdatePartials(
                     instance_->get(), tree_.operations.data(),
                     CheckedInt(tree_.operations.size(), "operation count"),
@@ -402,8 +406,8 @@ public:
                 "beagleGetSiteLogLikelihoods");
     const Clock::time_point total_end = Clock::now();
     return {Milliseconds(total_begin, tip_end),
-            Milliseconds(tip_end, transition_end),
-            Milliseconds(transition_end, total_end),
+            0.0,
+            Milliseconds(tip_end, total_end),
             Milliseconds(total_begin, total_end), log_likelihood_};
   }
 
@@ -538,6 +542,10 @@ int main(int argc, char **argv) {
     };
     const auto run_beagle = [&] {
       BeagleEvaluation aggregate;
+      const Clock::time_point total_begin = Clock::now();
+      aggregate.transition_ms += full_beagle.UpdateTransitionMatrices();
+      if (tail_beagle != nullptr)
+        aggregate.transition_ms += tail_beagle->UpdateTransitionMatrices();
       for (std::size_t first_site = 0; first_site < model.sites;
            first_site += site_batch) {
         const std::size_t count =
@@ -555,6 +563,7 @@ int main(int argc, char **argv) {
         std::copy(values.begin(), values.end(),
                   beagle_values.begin() + first_site);
       }
+      aggregate.total_ms = Milliseconds(total_begin, Clock::now());
       beagle_log_likelihood = aggregate.log_likelihood;
       tip_times.push_back(aggregate.tip_ms);
       transition_times.push_back(aggregate.transition_ms);
@@ -608,8 +617,10 @@ int main(int argc, char **argv) {
                  "workspace, topology, and substitution-model setup\n"
               << "# tip data remain resident for unchunked calls; chunked "
                  "totals include tip updates\n"
-              << "# both total times include JC69 transition-matrix updates, "
-                 "pruning, scaling, root integration, and site likelihoods\n"
+              << "# each BEAGLE instance updates JC69 transition matrices "
+                 "once per full alignment evaluation; total times also "
+                 "include pruning, scaling, root integration, and site "
+                 "likelihoods\n"
               << "baseline,precision,dataset,topology,leaves,nodes,sites,"
                  "site_batch,"
                  "primitive_levels,repeats,conditioning_ms,threads,"

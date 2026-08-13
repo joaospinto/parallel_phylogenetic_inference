@@ -20,6 +20,7 @@ cc_library(
         "include/parallel_phylogenetics/alignment.h",
         "include/parallel_phylogenetics/io.h",
         "include/parallel_phylogenetics/likelihood.h",
+        "src/alignment_internal.h",
     ],
     includes = ["include"],
     visibility = ["//visibility:public"],
