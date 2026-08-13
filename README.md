@@ -348,8 +348,55 @@ requirement for an explicitly scoped diagnostic summary.
 Multiple input logs must carry the same notebook cache identity. For logs
 captured outside that workflow, `--run-identity` is an explicit assertion that
 the hardware and benchmark protocol match; data from different machines are
-never pooled implicitly. Chunked resident-mode projections are excluded from
-the publication summaries and plots.
+never pooled implicitly. An explicit identity is accepted only when every log
+lacks a cache marker, so it cannot mask conflicting embedded identities.
+Chunked resident-mode projections are excluded from the publication summaries
+and plots.
+
+For a publication-ready view of one complete prespecified cohort,
+`scripts/plot_empirical_corpus.py` builds on the same parser, aggregation, and
+batch-selection functions. It requires one exact study, precision, benchmark
+mode, native backend, and BEAGLE stratum. It then verifies the empirical
+driver's declared site-batch grid and planned case count, including explicit
+capacity-limit markers, before pairing any problems. A missing problem, a
+missing feasible batch, an undeclared batch, mixed structural metadata, or a
+correctness-threshold failure aborts the report instead of reducing its sample
+silently. For each method and problem, the selected batch is the declared,
+successfully measured batch with the smallest median complete-alignment wall
+time; exact ties select the larger batch. The paired CSV records every
+candidate and selected batch.
+
+Correctness admission uses the logged scale-normalized error,
+`|result-reference| / max(1, |reference|)`. Absolute errors are retained in the
+paired report but are descriptive by default, since their scale grows with a
+complete alignment's log-likelihood; `--max-abs-error` is available as an
+optional additional guard.
+
+Both manifest-defined cohorts and the declared PANDIT selection are supported.
+For PANDIT, the single full-pattern batch per family and the reported selected-
+family count form the corresponding completeness declaration.
+
+The report includes a two-panel crossover plot against taxon count and the
+node-by-unique-pattern workload, plus a distribution plot over prespecified
+taxon bins. Every problem is shown as a point. A violin envelope is added only
+to bins with at least five problems; empty and small bins remain explicit.
+For example:
+
+```sh
+scripts/plot_empirical_corpus.py report.txt \
+  --native cuda --baseline beagle-cpu --beagle-threads 1 \
+  --precision FP32 --benchmark-mode full-input-update \
+  --study empirical-manifest-MANIFEST_SHA-minbrlen-0.000001 \
+  --max-normalized-error 0.002 \
+  --run-identity same-machine-protocol \
+  --taxa-bin-edges 0,256,1024,4096,16384,inf \
+  --output-directory figures/empirical
+```
+
+Metal and ROCm are selected with `--native metal` or `--native rocm`;
+BEAGLE's GPU stratum is selected with `--baseline beagle-cuda`. Matplotlib is
+needed only to render PDFs. `--validate-only` still emits the strict paired,
+taxon-bin, and protocol reports without importing it.
 
 The Fish Tree of Life supplies a much larger empirical nucleotide case with
 11,638 taxa and 24,143 sites. `scripts/fetch_fish_tree.sh` downloads and

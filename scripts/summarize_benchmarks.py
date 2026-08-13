@@ -46,8 +46,6 @@ def row_identity(row: dict[str, str], include_site_batch: bool = True) -> tuple[
 
 
 def validate_run_identity(paths: list[Path], override: str | None) -> str:
-    if override is not None:
-        return override
     prefix = "# cache_identity sha256="
     identities: list[str | None] = []
     for path in paths:
@@ -59,6 +57,13 @@ def validate_run_identity(paths: list[Path], override: str | None) -> str:
         if len(found) > 1:
             raise ValueError(f"{path} contains multiple cache identities")
         identities.append(next(iter(found)) if found else None)
+    if override is not None:
+        if any(identity is not None for identity in identities):
+            raise ValueError(
+                "--run-identity is only valid when every input log lacks a "
+                "cache identity; embedded identities cannot be overridden"
+            )
+        return override
     if len(paths) == 1 and identities[0] is None:
         return str(paths[0].resolve())
     if any(identity is None for identity in identities):
@@ -233,7 +238,13 @@ def best_batches(rows: list[dict[str, object]]) -> list[dict[str, object]]:
         )
         groups[key].append(row)
     return [
-        min(group, key=lambda row: float(row["total_ms"]))
+        min(
+            group,
+            key=lambda row: (
+                float(row["total_ms"]),
+                -int(str(row["site_batch"])),
+            ),
+        )
         for group in groups.values()
     ]
 
