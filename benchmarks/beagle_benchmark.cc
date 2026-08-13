@@ -621,15 +621,16 @@ int main(int argc, char **argv) {
                  "once per full alignment evaluation; total times also "
                  "include pruning, scaling, root integration, and site "
                  "likelihoods\n"
-              << "baseline,precision,dataset,topology,leaves,nodes,sites,"
-                 "site_batch,"
+              << "baseline,beagle_resource,precision,dataset,topology,leaves,"
+                 "nodes,sites,site_batch,"
                  "primitive_levels,repeats,conditioning_ms,threads,"
                  "sequential_ms,beagle_tip_ms,beagle_transition_ms,"
                  "beagle_pruning_ms,beagle_total_ms,sequential_over_beagle,"
                  "sequential_log_likelihood,beagle_log_likelihood,"
                  "max_abs_error,max_relative_error\n"
-              << std::setprecision(10) << "beagle," << tree_hmm::kPrecisionName
-              << ',' << problem.dataset << ',' << problem.topology << ','
+              << std::setprecision(10) << "beagle," << options.resource << ','
+              << tree_hmm::kPrecisionName << ',' << problem.dataset << ','
+              << problem.topology << ','
               << problem.leaves << ',' << problem.plan.num_nodes() << ','
               << problem.sites << ',' << site_batch << ','
               << statistics.primitive_levels << ','

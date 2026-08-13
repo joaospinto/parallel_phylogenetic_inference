@@ -164,6 +164,10 @@ the generated manifest. By default it includes every family with at least 100
 tips; PANDIT 17.0 has 325 such families. It supports our Metal or CUDA backend
 and BEAGLE's CPU or CUDA backend, and accepts environment variables for the
 minimum tip count, repeat count, precision, and an optional smoke-test limit.
+`scripts/summarize_benchmarks.py` reads the CSV records embedded in the raw
+logs, takes medians across repeated records, selects the fastest measured site
+batch by a declared rule, and reports either the selected cases or paired
+accelerator-versus-BEAGLE corpus distributions.
 
 The Fish Tree of Life supplies a much larger empirical nucleotide case with
 11,638 taxa and 24,143 sites. `scripts/fetch_fish_tree.sh` downloads and
