@@ -23,8 +23,12 @@ sh_test(
     name = "corpus_preparation_test",
     srcs = ["tests/corpus_preparation_test.sh"],
     data = [
+        "scripts/corpus_common.py",
+        "scripts/empirical_manifest_rows.py",
         "scripts/prepare_dryad_corpus.py",
+        "scripts/prepare_raxml_grove.py",
         "scripts/prepare_streaming_alignment.py",
+        "scripts/prepare_treebase_mirror.py",
     ],
 )
 

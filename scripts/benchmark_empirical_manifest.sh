@@ -47,16 +47,32 @@ fi
   exit 2
 }
 work_directory="$(mktemp -d "${TMPDIR:-/tmp}/empirical-benchmark.XXXXXX")"
+rows_file="${work_directory}/manifest-rows.tsv"
 trap 'rm -rf "${work_directory}"' EXIT
+python3 "${script_directory}/empirical_manifest_rows.py" \
+  "${manifest}" > "${rows_file}"
 
 case "${method}" in
-  cuda|rocm|metal) target="${method}_benchmark"; extra=(); resume_threads="" ;;
-  beagle-cpu) target=beagle_benchmark; extra=(--beagle-resource cpu --beagle-threads "${threads}"); resume_threads="${threads}" ;;
-  beagle-cuda) target=beagle_benchmark; extra=(--beagle-resource cuda --beagle-threads 1); resume_threads=1 ;;
+  cuda|rocm|metal)
+    target="${method}_benchmark"
+    extra=()
+    resume_threads=""
+    ;;
+  beagle-cpu)
+    target=beagle_benchmark
+    extra=(--beagle-resource cpu --beagle-threads "${threads}")
+    resume_threads="${threads}"
+    ;;
+  beagle-cuda)
+    target=beagle_benchmark
+    extra=(--beagle-resource cuda --beagle-threads 1)
+    resume_threads=1
+    ;;
   *) echo "unsupported method ${method}" >&2; exit 2 ;;
 esac
 
-echo "# manifest=${manifest}"
+echo "# empirical_manifest=$(basename "${manifest}")"
+echo "# empirical_manifest_sha256=$(shasum -a 256 "${manifest}" | awk '{print $1}')"
 if [[ -f "${metadata}" ]]; then
   while IFS= read -r line; do
     [[ -n "${line}" ]] && echo "# ${line}"
@@ -89,21 +105,18 @@ site_batches_for() {
 }
 
 total_cases=0
-while IFS=, read -r dataset taxa raw_sites unique_patterns alignment \
-  pattern_weights tree rest; do
-  dataset="${dataset%$'\r'}"
-  [[ "${dataset}" == dataset ]] && continue
+while IFS=$'\t' read -r dataset taxa raw_sites unique_patterns alignment \
+  pattern_weights tree; do
   while IFS= read -r ignored; do
     total_cases=$((total_cases + 1))
   done < <(site_batches_for "${unique_patterns}")
-done < "${manifest}"
+done < "${rows_file}"
 echo "# planned_cases=${total_cases}"
+
 completed_cases=0
 cd "${repository}"
-while IFS=, read -r dataset taxa raw_sites unique_patterns alignment \
-  pattern_weights tree rest; do
-  dataset="${dataset%$'\r'}"
-  [[ "${dataset}" == dataset ]] && continue
+while IFS=$'\t' read -r dataset taxa raw_sites unique_patterns alignment \
+  pattern_weights tree; do
   benchmark_capacity_exhausted=0
   benchmark_capacity_dataset="${dataset}"
   benchmark_capacity_mode="${benchmark_mode}"
@@ -145,4 +158,4 @@ while IFS=, read -r dataset taxa raw_sites unique_patterns alignment \
       break
     fi
   done < <(site_batches_for "${unique_patterns}")
-done < "${manifest}"
+done < "${rows_file}"

@@ -11,33 +11,23 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import math
-import re
 from pathlib import Path
 
-DNA = frozenset("ACGTURYSWKMBDHVN?-.")
+from corpus_common import (
+    DNA,
+    compress_patterns,
+    dataset_id,
+    parse_newick,
+    sha256,
+    write_fasta,
+    write_metadata,
+)
+
 DOI = "10.5061/dryad.8gtht76zz"
 DRYAD_FILE_ID = "4142269"
 ARCHIVE_SHA256 = "06cee5bd75748acf5ba95a10b404b2867dd0b52a3e9e1b9ec357f9d9c7e09f4c"
 SELECTION_RULE = "all DNA alignment.phy entries; maximum-logLikelihood version=standard tree"
-
-
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def dataset_id(relative: Path) -> str:
-    source = relative.as_posix()
-    readable = re.sub(r"[^A-Za-z0-9_.-]+", "_", source).strip("_.-")
-    if not readable:
-        readable = "dataset"
-    digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:12]
-    return f"{readable}-{digest}"
 
 
 def append_fragment(sequence: str, fragment: str, sites: int) -> str:
@@ -84,98 +74,6 @@ def read_interleaved_phylip(path: Path) -> tuple[list[str], list[str], int]:
     return names, sequences, sites
 
 
-class NewickLeaves:
-    def __init__(self, text: str):
-        self.text = text
-        self.position = 0
-
-    def skip(self) -> None:
-        while self.position < len(self.text):
-            if self.text[self.position].isspace():
-                self.position += 1
-            elif self.text[self.position] == "[":
-                depth = 1
-                self.position += 1
-                while self.position < len(self.text) and depth:
-                    depth += (self.text[self.position] == "[") - (
-                        self.text[self.position] == "]"
-                    )
-                    self.position += 1
-                if depth:
-                    raise ValueError("unterminated Newick comment")
-            else:
-                break
-
-    def label(self) -> str:
-        self.skip()
-        if self.position < len(self.text) and self.text[self.position] == "'":
-            self.position += 1
-            result = ""
-            while self.position < len(self.text):
-                character = self.text[self.position]
-                self.position += 1
-                if character != "'":
-                    result += character
-                elif self.position < len(self.text) and self.text[self.position] == "'":
-                    result += "'"
-                    self.position += 1
-                else:
-                    return result
-            raise ValueError("unterminated quoted Newick label")
-        begin = self.position
-        while self.position < len(self.text) and self.text[self.position] not in "(),:;[] \t\r\n":
-            self.position += 1
-        return self.text[begin : self.position]
-
-    def suffix(self) -> None:
-        self.label()
-        self.skip()
-        if self.position < len(self.text) and self.text[self.position] == ":":
-            self.position += 1
-            while self.position < len(self.text) and self.text[self.position] not in ",);[ \t\r\n":
-                self.position += 1
-        self.skip()
-
-    def subtree(self) -> list[str]:
-        self.skip()
-        if self.position < len(self.text) and self.text[self.position] == "(":
-            self.position += 1
-            result = self.subtree()
-            while True:
-                self.skip()
-                if self.position < len(self.text) and self.text[self.position] == ",":
-                    self.position += 1
-                    result.extend(self.subtree())
-                else:
-                    break
-            if self.position >= len(self.text) or self.text[self.position] != ")":
-                raise ValueError("malformed Newick child list")
-            self.position += 1
-            self.suffix()
-            return result
-        label = self.label()
-        if not label:
-            raise ValueError("unlabelled Newick leaf")
-        self.skip()
-        if self.position < len(self.text) and self.text[self.position] == ":":
-            self.position += 1
-            while self.position < len(self.text) and self.text[self.position] not in ",);[ \t\r\n":
-                self.position += 1
-        self.skip()
-        return [label]
-
-    def parse(self) -> list[str]:
-        result = self.subtree()
-        self.skip()
-        if self.position >= len(self.text) or self.text[self.position] != ";":
-            raise ValueError("Newick tree has no terminator")
-        self.position += 1
-        self.skip()
-        if self.position != len(self.text):
-            raise ValueError("text follows Newick terminator")
-        return result
-
-
 def select_tree(parquet: Path) -> tuple[str, float]:
     try:
         import pyarrow.parquet as pq
@@ -201,31 +99,6 @@ def select_tree(parquet: Path) -> tuple[str, float]:
     return tree.rstrip(";\n") + ";\n", likelihood
 
 
-def compress_patterns(sequences: list[str]) -> tuple[list[str], list[int]]:
-    by_pattern: dict[str, int] = {}
-    unique: list[str] = []
-    weights: list[int] = []
-    for pattern in zip(*sequences):
-        encoded = "".join(pattern)
-        index = by_pattern.get(encoded)
-        if index is None:
-            by_pattern[encoded] = len(unique)
-            unique.append(encoded)
-            weights.append(1)
-        else:
-            weights[index] += 1
-    compressed = ["".join(pattern[taxon] for pattern in unique) for taxon in range(len(sequences))]
-    return compressed, weights
-
-
-def write_fasta(path: Path, names: list[str], sequences: list[str]) -> None:
-    with path.open("w", encoding="ascii") as stream:
-        for name, sequence in zip(names, sequences):
-            stream.write(f">{name}\n")
-            for start in range(0, len(sequence), 80):
-                stream.write(sequence[start : start + 80] + "\n")
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("raw", type=Path)
@@ -248,7 +121,7 @@ def main() -> None:
                 raise ValueError("missing pars_summary.parquet")
             names, sequences, raw_sites = read_interleaved_phylip(alignment)
             tree, likelihood = select_tree(parquet)
-            leaves = NewickLeaves(tree).parse()
+            leaves = parse_newick(tree).leaf_labels
             if len(leaves) != len(set(leaves)):
                 raise ValueError("selected tree has duplicate leaf labels")
             if set(leaves) != set(names):
@@ -309,6 +182,22 @@ def main() -> None:
         writer = csv.writer(stream)
         writer.writerow(("source_relative_directory", "reason"))
         writer.writerows(exclusions)
+    write_metadata(
+        arguments.output / "corpus_metadata.txt",
+        [
+            ("corpus", "togkousidis-dryad-treebase"),
+            ("corpus_kind", "empirical-tree-alignment-pairs"),
+            ("corpus_doi", DOI),
+            ("corpus_version", 6),
+            ("corpus_license", "CC0-1.0"),
+            ("source_file_id", DRYAD_FILE_ID),
+            ("source_archive_sha256", ARCHIVE_SHA256),
+            ("pattern_compression", "exact-duplicate-columns"),
+            ("selection_rule", SELECTION_RULE + "; no timing filter"),
+            ("selected_datasets", len(rows)),
+            ("excluded_datasets", len(exclusions)),
+        ],
+    )
     print(f"selected {len(rows)} of {len(alignments)} prespecified DNA alignments")
 
 

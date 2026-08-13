@@ -331,15 +331,55 @@ log-likelihood row among `version == "standard"` in the corresponding
 exact duplicate-column compression, and records source and normalized hashes.
 Selection is independent of benchmark timing. PyArrow is needed only while
 creating this compact manifest; benchmark runtime remains dependency-free.
-`scripts/benchmark_empirical_manifest.sh` consumes the resulting manifest.
+
+The public TreeBASE Mirror used by the LvD study provides additional inferred
+trees and their original alignments. The following workflow makes a blobless,
+revision-pinned clone and prepares the first 400 eligible DNA pairs in a fixed
+SHA-256 order. Only pairs with at least 100 exactly matching tree/alignment
+taxa are eligible; every inspected exclusion and every source and normalized
+hash is recorded.
+
+```sh
+scripts/clone_pinned_git_corpus.sh \
+  https://github.com/angtft/TreeBASEMirror.git \
+  c5bad4a1c3103244bc0d3a21db7a6b9329a9dc13 work/treebase-mirror
+python3 scripts/prepare_treebase_mirror.py \
+  work/treebase-mirror work/treebase-selected
+```
+
+RAxML Grove is an empirical *tree and fitted-metadata* database. Its authors
+explicitly withhold the anonymized source alignments, so it cannot honestly be
+treated as a corpus of empirical tree--alignment pairs. The corresponding
+preparer instead selects 20 nucleotide trees by fixed hash rank in each of
+five prespecified taxon-count bins and simulates 256 JC69 sites with recorded,
+deterministic seeds. This provides realistic empirical topologies across a
+wide size range while keeping the simulated observations clearly identified.
+
+```sh
+scripts/clone_pinned_git_corpus.sh \
+  https://github.com/angtft/RAxMLGrove.git \
+  b81faa13a93703fcdfbd6e6fa2ed1bb5b42b76f5 work/raxml-grove
+python3 scripts/prepare_raxml_grove.py \
+  work/raxml-grove work/raxml-grove-selected
+```
+
+No source or prepared corpus is distributed with this repository. Each
+preparer writes `manifest.csv`, `excluded.csv`, and `corpus_metadata.txt`;
+`scripts/benchmark_empirical_manifest.sh` consumes any such manifest and
+copies its provenance into the benchmark log.
 
 `scripts/prepare_ltplus.sh` checksum-verifies the official February 2026
 LTPlus tree and alignment and invokes a two-pass streaming preparation. It
 never materializes the 23 GB FASTA: the first pass records per-coordinate
 coverage and observed bases, and the second emits positions with at least 50%
-unambiguous coverage and at least two observed bases. The exact rule, coverage
-distribution, input hashes, label normalization, and one-to-one taxon check
-are recorded in the output manifest.
+unambiguous coverage. Invariant columns are retained. To exercise the 261,845-
+node topology without creating an 8+ GB derived alignment, the default output
+is a deterministic, seed-recorded subset of at most 512 eligible coordinates;
+pass `--maximum-coordinates 0` to retain all eligible coordinates. The exact
+rule, selected-index hash, coverage distribution, input hashes, label
+normalization, and one-to-one taxon check are recorded in the output manifest.
+Exact duplicate patterns are compressed only after coordinate selection, with
+their multiplicities retained in `pattern_weights.txt`.
 
 No GitHub remote or push is required for that workflow.
 

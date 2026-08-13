@@ -2,8 +2,9 @@
 """Filter a large zipped FASTA without materializing the alignment.
 
 The first pass records, for every coordinate, the number of unambiguous DNA
-bases and the set of observed bases.  The second pass writes only coordinates
-meeting the prespecified coverage and variability rule.  A completed first
+bases and the set of observed bases.  The second pass retains every coordinate
+meeting the prespecified coverage rule, optionally applying a deterministic
+size cap whose seed and selected-index digest are recorded.  A completed first
 pass is checkpointed and reused only when the input SHA-256 and member name
 match exactly.
 """
@@ -12,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import array
+import csv
 import hashlib
 import json
 import math
@@ -22,6 +24,24 @@ from typing import Iterator
 
 BASE_BITS = {"A": 1, "C": 2, "G": 4, "T": 8, "U": 8}
 CHECKPOINT_VERSION = 2
+
+
+def splitmix64(value: int) -> int:
+    value = (value + 0x9E3779B97F4A7C15) & ((1 << 64) - 1)
+    value = ((value ^ (value >> 30)) * 0xBF58476D1CE4E5B9) & ((1 << 64) - 1)
+    value = ((value ^ (value >> 27)) * 0x94D049BB133111EB) & ((1 << 64) - 1)
+    return value ^ (value >> 31)
+
+
+def select_coordinates(
+    eligible: list[int], maximum: int | None, seed: int
+) -> list[int]:
+    if maximum is None or len(eligible) <= maximum:
+        return eligible
+    selected = sorted(
+        eligible, key=lambda index: (splitmix64(index ^ seed), index)
+    )[:maximum]
+    return sorted(selected)
 
 
 def sha256(path: Path) -> str:
@@ -202,10 +222,21 @@ def main() -> None:
     parser.add_argument("output", type=Path)
     parser.add_argument("--member")
     parser.add_argument("--minimum-observed-fraction", type=float, default=0.5)
+    parser.add_argument(
+        "--maximum-coordinates",
+        type=int,
+        default=512,
+        help="deterministic cap after coverage filtering; zero retains all",
+    )
+    parser.add_argument("--selection-seed", type=int, default=20260813)
     parser.add_argument("--analyze-only", action="store_true")
     arguments = parser.parse_args()
     if not 0 < arguments.minimum_observed_fraction <= 1:
         parser.error("coverage fraction must lie in (0, 1]")
+    if arguments.maximum_coordinates < 0:
+        parser.error("maximum-coordinates must be nonnegative")
+    if not 0 <= arguments.selection_seed < (1 << 64):
+        parser.error("selection-seed must be an unsigned 64-bit integer")
     arguments.output.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(arguments.archive) as zipped:
         members = [name for name in zipped.namelist() if name.lower().endswith((".fa", ".fasta", ".fas")) and not name.startswith("__MACOSX/")]
@@ -249,7 +280,16 @@ def main() -> None:
         states = bytearray(states_file.read_bytes())
 
     threshold = math.ceil(arguments.minimum_observed_fraction * len(names))
-    retained = [index for index, (count, mask) in enumerate(zip(coverage, states)) if count >= threshold and mask & (mask - 1)]
+    eligible = [
+        index for index, count in enumerate(coverage) if count >= threshold
+    ]
+    maximum = arguments.maximum_coordinates or None
+    retained = select_coordinates(eligible, maximum, arguments.selection_seed)
+    if not retained:
+        raise ValueError("coverage rule retained no alignment coordinates")
+    selected_indices_sha256 = hashlib.sha256(
+        "".join(f"{index}\n" for index in retained).encode("ascii")
+    ).hexdigest()
     coverage_quantiles = {}
     ordered = sorted(coverage)
     for percentile in (0, 25, 50, 75, 90, 95, 99, 100):
@@ -261,10 +301,20 @@ def main() -> None:
         "source_tree_sha256": sha256(arguments.tree),
         "minimum_observed_fraction": arguments.minimum_observed_fraction,
         "minimum_observed_taxa": threshold,
-        "variable": True,
+        "eligible_coordinates": len(eligible),
+        "eligible_variable_coordinates": sum(
+            1 for index in eligible if states[index] & (states[index] - 1)
+        ),
+        "maximum_coordinates": maximum,
+        "selection_seed": arguments.selection_seed,
+        "selected_indices_sha256": selected_indices_sha256,
         "retained_coordinates": len(retained),
         "coverage_fraction_quantiles": coverage_quantiles,
-        "selection_rule": "coverage >= threshold among A/C/G/T/U and at least two observed bases",
+        "selection_rule": (
+            "all coordinates with A/C/G/T/U coverage >= threshold; if above "
+            "maximum_coordinates, lowest SplitMix64(index XOR selection_seed) "
+            "ranks, emitted in original coordinate order"
+        ),
         "leaf_label_transform": "exact prefix before first comma, stripped; required unique and complete",
         "nucleotide_transform": "strip alignment whitespace and map U to T; preserve IUPAC ambiguity and gaps",
     }
@@ -278,22 +328,94 @@ def main() -> None:
         raise ValueError("normalized tree leaves and alignment records do not match exactly")
     tree_output = arguments.output / "tree.nwk"
     tree_output.write_text(normalized_tree + ("\n" if not normalized_tree.endswith("\n") else ""), encoding="utf-8")
-    alignment_output = arguments.output / "alignment.fasta"
+    alignment_output = arguments.output / "patterns.fasta"
+    weights_output = arguments.output / "pattern_weights.txt"
     seen: list[str] = []
-    with alignment_output.open("w", encoding="ascii") as output:
-        for name, sequence in fasta_records(arguments.archive, member):
-            seen.append(name)
-            selected = "".join(sequence[index] for index in retained).replace("U", "T")
-            output.write(f">{name}\n")
-            for start in range(0, len(selected), 80):
-                output.write(selected[start : start + 80] + "\n")
+    columns = [bytearray() for _ in retained]
+    for name, sequence in fasta_records(arguments.archive, member):
+        seen.append(name)
+        selected = "".join(sequence[index] for index in retained).replace("U", "T")
+        for column, character in zip(columns, selected):
+            column.append(ord(character))
     if seen != names:
         raise ValueError("FASTA record order changed between streaming passes")
+    by_pattern: dict[bytes, int] = {}
+    patterns: list[bytes] = []
+    weights: list[int] = []
+    for column in columns:
+        pattern = bytes(column)
+        existing = by_pattern.get(pattern)
+        if existing is None:
+            by_pattern[pattern] = len(patterns)
+            patterns.append(pattern)
+            weights.append(1)
+        else:
+            weights[existing] += 1
+    with alignment_output.open("w", encoding="ascii") as output:
+        for taxon, name in enumerate(names):
+            compressed = bytes(pattern[taxon] for pattern in patterns).decode("ascii")
+            output.write(f">{name}\n")
+            for start in range(0, len(compressed), 80):
+                output.write(compressed[start : start + 80] + "\n")
+    weights_output.write_text(
+        "".join(f"{weight}\n" for weight in weights), encoding="ascii"
+    )
     summary.update(
         normalized_tree_sha256=sha256(tree_output),
         normalized_alignment_sha256=sha256(alignment_output),
+        pattern_weights_sha256=sha256(weights_output),
     )
     (arguments.output / "manifest.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    manifest_fields = (
+        "dataset", "taxa", "raw_sites", "unique_patterns", "alignment",
+        "pattern_weights", "tree", "source_alignment_sha256",
+        "source_tree_sha256", "normalized_alignment_sha256",
+        "pattern_weights_sha256", "normalized_tree_sha256",
+        "selected_indices_sha256", "selection_rule",
+    )
+    manifest_row = {
+        "dataset": "ltplus-february-2026",
+        "taxa": len(names),
+        "raw_sites": len(retained),
+        "unique_patterns": len(weights),
+        "alignment": alignment_output.name,
+        "pattern_weights": weights_output.name,
+        "tree": tree_output.name,
+        "source_alignment_sha256": summary["archive_sha256"],
+        "source_tree_sha256": summary["source_tree_sha256"],
+        "normalized_alignment_sha256": summary["normalized_alignment_sha256"],
+        "pattern_weights_sha256": summary["pattern_weights_sha256"],
+        "normalized_tree_sha256": summary["normalized_tree_sha256"],
+        "selected_indices_sha256": selected_indices_sha256,
+        "selection_rule": summary["selection_rule"],
+    }
+    with (arguments.output / "manifest.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as stream:
+        writer = csv.DictWriter(stream, fieldnames=manifest_fields)
+        writer.writeheader()
+        writer.writerow(manifest_row)
+    (arguments.output / "excluded.csv").write_text(
+        "source_relative_directory,reason\n", encoding="utf-8"
+    )
+    metadata_lines = {
+        "corpus": "ltplus-february-2026",
+        "corpus_kind": "empirical-tree-alignment-coordinate-subset",
+        "source_tree_sha256": summary["source_tree_sha256"],
+        "source_alignment_sha256": summary["archive_sha256"],
+        "minimum_observed_fraction": arguments.minimum_observed_fraction,
+        "eligible_coordinates": len(eligible),
+        "maximum_coordinates": maximum if maximum is not None else "all",
+        "selection_seed": arguments.selection_seed,
+        "selected_indices_sha256": selected_indices_sha256,
+        "selection_rule": summary["selection_rule"],
+        "pattern_compression": "exact-duplicate-selected-columns",
+        "redistribution": "none; outputs are prepared locally from official endpoints",
+    }
+    (arguments.output / "corpus_metadata.txt").write_text(
+        "".join(f"{key}={value}\n" for key, value in metadata_lines.items()),
+        encoding="utf-8",
+    )
     print(f"retained {len(retained)} of {len(states)} coordinates for {len(names)} taxa")
 
 
