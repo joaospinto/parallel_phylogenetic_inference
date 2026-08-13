@@ -748,7 +748,8 @@ def create_plots(
 
     native_label = display_method(native_method)
     baseline_label = display_method(baseline_method)
-    speedup_label = f"$\\log_2$ speedup of {native_label} over {baseline_label}"
+    speedup_label = "$\\log_2$ speedup"
+    comparison_title = f"{native_label} over {baseline_label}"
 
     figure, axes = plt.subplots(1, 2, figsize=(8.4, 3.5), sharey=True)
     speedups = [
@@ -771,7 +772,9 @@ def create_plots(
         axis.axhline(0.0, color="black", linewidth=0.8)
         axis.grid(alpha=0.2)
     axes[0].set_ylabel(speedup_label)
-    figure.suptitle(f"Matched empirical problems (n={len(paired)})")
+    figure.suptitle(
+        f"{comparison_title}: matched empirical problems (n={len(paired)})"
+    )
     figure.tight_layout()
     figure.savefig(
         output / f"empirical_crossover_{configuration}.pdf", bbox_inches="tight"
@@ -817,6 +820,7 @@ def create_plots(
     )
     axis.set_xlabel("taxa (prespecified bins)")
     axis.set_ylabel(speedup_label)
+    axis.set_title(comparison_title)
     axis.grid(axis="y", alpha=0.2)
     figure.tight_layout()
     figure.savefig(
