@@ -225,6 +225,59 @@ TREE_HMM_EMPIRICAL_SITE_BATCHES='256 1024 4096' \
 grep -Fq 'dataset=large taxa=10 raw_sites=100000 unique_patterns=100000 site_batch=100000' \
   "${manifest_directory}/complete-dry-run.txt"
 
+TREE_HMM_DRY_RUN=1 TREE_HMM_HOST_MEMORY_GUARD_KIB=262144 \
+TREE_HMM_EMPIRICAL_SITE_BATCHES='256 1024 4096' \
+  bash "${root}/scripts/benchmark_empirical_manifest.sh" --interleave \
+    "${manifest_directory}/manifest.csv" metal beagle-cpu:1 beagle-cpu:4 > \
+    "${manifest_directory}/interleaved-dry-run.txt"
+awk '
+  /^# benchmark_start / {
+    method = threads = ""
+    for (field = 3; field <= NF; ++field) {
+      split($field, pair, "=")
+      if (pair[1] == "method") method = pair[2]
+      if (pair[1] == "threads") threads = pair[2]
+    }
+    print method ":" threads
+  }
+' "${manifest_directory}/interleaved-dry-run.txt" > \
+  "${manifest_directory}/observed-method-order.txt"
+cat > "${manifest_directory}/expected-method-order.txt" <<'EOF'
+metal:none
+beagle-cpu:1
+beagle-cpu:4
+beagle-cpu:1
+beagle-cpu:4
+metal:none
+beagle-cpu:4
+metal:none
+beagle-cpu:1
+metal:none
+beagle-cpu:1
+beagle-cpu:4
+beagle-cpu:1
+beagle-cpu:4
+metal:none
+EOF
+diff -u "${manifest_directory}/expected-method-order.txt" \
+  "${manifest_directory}/observed-method-order.txt"
+[[ "$(grep -c '^# empirical_manifest=' \
+  "${manifest_directory}/interleaved-dry-run.txt")" == 3 ]]
+grep -Fq '# method_order_policy=cyclic rotation by empirical dataset/site-batch case' \
+  "${manifest_directory}/interleaved-dry-run.txt"
+TREE_HMM_DRY_RUN=1 TREE_HMM_HOST_MEMORY_GUARD_KIB=262144 \
+  bash "${root}/scripts/benchmark_empirical_manifest.sh" --interleave \
+    "${manifest_directory}/manifest.csv" metal > \
+    "${manifest_directory}/single-method-dry-run.txt"
+grep -Fq '# method_order_policy=single-method' \
+  "${manifest_directory}/single-method-dry-run.txt"
+if TREE_HMM_DRY_RUN=1 TREE_HMM_HOST_MEMORY_GUARD_KIB=262144 \
+   bash "${root}/scripts/benchmark_empirical_manifest.sh" --interleave \
+     "${manifest_directory}/manifest.csv" metal metal >/dev/null 2>&1; then
+  echo "interleaved empirical driver accepted a duplicate method" >&2
+  exit 1
+fi
+
 study_log="${work_directory}/study.log"
 cat > "${study_log}" <<'EOF'
 # topology_distributions=yule

@@ -177,9 +177,12 @@ commits can be selected with `BEAGLE_VERSION_LABEL`,
 in `BEAGLE_BUILD_METADATA.txt`. A development branch is never silently
 reported as a numbered release.
 
-Warmup and workspace allocation are excluded. CPU and accelerator execution
-order alternates between repetitions to reduce order bias. The standard Metal
-sweep additionally performs five seconds of untimed interleaved conditioning
+Warmup and workspace allocation are excluded. Within each binary, conventional
+CPU and accelerator or BEAGLE execution alternate between repetitions. For an
+empirical manifest, the driver additionally rotates the native and BEAGLE
+method order after every dataset/site-batch case, limiting corpus-scale thermal
+and temporal drift without combining their independent measurement paths. The
+standard Metal sweep performs five seconds of untimed interleaved conditioning
 before each case to reduce thermal-state bias on passively cooled systems. The
 reported total accelerator time includes conversion from the phylogenetic
 model to generic tree-HMM factors, host/device transfer, kernel execution, and
@@ -478,7 +481,9 @@ capacity failure, so a smaller GPU does not restart the notebook.
 
 The `empirical` section accepts one or more whitespace-separated manifest
 paths through `TREE_HMM_EMPIRICAL_MANIFESTS` and runs the native backend plus
-the available BEAGLE CPU/CUDA resources under the same capacity policy. The
+the available BEAGLE CPU/CUDA resources under the same capacity policy. Their
+method-specific binaries are invoked in a deterministic case-level cyclic
+order, and each method remains independently resumable. The
 Kaggle launcher automatically discovers attached directories containing both
 `manifest.csv` and `corpus_metadata.txt`, and extracts archives named
 `parallel_phylogenetics_corpus_*.zip`. Attaching such a corpus without an
@@ -532,6 +537,14 @@ No source or prepared corpus is distributed with this repository. Each
 preparer writes `manifest.csv`, `excluded.csv`, and `corpus_metadata.txt`;
 `scripts/benchmark_empirical_manifest.sh` consumes any such manifest and
 copies its provenance into the benchmark log.
+
+For a direct matched-method run, pass the complete method set to one
+orchestrator invocation; the executables and output records remain separate:
+
+```sh
+PRECISION=fp32 scripts/benchmark_empirical_manifest.sh --interleave \
+  work/corpus/manifest.csv metal beagle-cpu:1 beagle-cpu:10
+```
 
 `scripts/prepare_ltplus.sh` checksum-verifies the official February 2026
 LTPlus tree and alignment and invokes a two-pass streaming preparation. It

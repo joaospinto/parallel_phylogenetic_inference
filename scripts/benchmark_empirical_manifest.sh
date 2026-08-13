@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 2 ]]; then
+if [[ $# -ge 3 && "$1" == --interleave ]]; then
+  manifest_argument="$2"
+  shift 2
+  method_specs=("$@")
+elif [[ $# -eq 2 ]]; then
+  method_specs=("$1")
+  manifest_argument="$2"
+else
   echo "usage: $0 {cuda|rocm|metal|beagle-cpu|beagle-cuda} manifest.csv" >&2
+  echo "   or: $0 --interleave manifest.csv METHOD_SPEC..." >&2
+  echo "METHOD_SPEC is a native method, beagle-cuda, or beagle-cpu:THREADS" >&2
   exit 2
 fi
-method="$1"
-manifest="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
+manifest="$(cd "$(dirname "${manifest_argument}")" && pwd)/$(
+  basename "${manifest_argument}")"
 root="$(dirname "${manifest}")"
 repository="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 script_directory="${repository}/scripts"
@@ -79,45 +88,45 @@ trap 'rm -rf "${work_directory}"' EXIT
 python3 "${script_directory}/empirical_manifest_rows.py" \
   "${manifest}" > "${rows_file}"
 
-case "${method}" in
-  cuda|rocm|metal)
-    target="${method}_benchmark"
-    extra=()
-    resume_threads=""
-    ;;
-  beagle-cpu)
-    target=beagle_benchmark
-    extra=(--beagle-resource cpu --beagle-threads "${threads}")
-    resume_threads="${threads}"
-    ;;
-  beagle-cuda)
-    target=beagle_benchmark
-    extra=(--beagle-resource cuda --beagle-threads 1)
-    resume_threads=1
-    ;;
-  *) echo "unsupported method ${method}" >&2; exit 2 ;;
-esac
+methods=()
+method_threads=()
+for specification in "${method_specs[@]}"; do
+  case "${specification}" in
+    cuda|rocm|metal)
+      parsed_method="${specification}"
+      parsed_threads=""
+      ;;
+    beagle-cuda)
+      parsed_method=beagle-cuda
+      parsed_threads=1
+      ;;
+    beagle-cpu)
+      parsed_method=beagle-cpu
+      parsed_threads="${threads}"
+      ;;
+    beagle-cpu:*)
+      parsed_method=beagle-cpu
+      parsed_threads="${specification#beagle-cpu:}"
+      [[ "${parsed_threads}" =~ ^[1-9][0-9]*$ ]] || {
+        echo "invalid BEAGLE CPU method specification ${specification}" >&2
+        exit 2
+      }
+      ;;
+    *) echo "unsupported method specification ${specification}" >&2; exit 2 ;;
+  esac
+  for index in "${!methods[@]}"; do
+    if [[ "${methods[index]}" == "${parsed_method}" &&
+          "${method_threads[index]}" == "${parsed_threads}" ]]; then
+      echo "duplicate method specification ${specification}" >&2
+      exit 2
+    fi
+  done
+  methods+=("${parsed_method}")
+  method_threads+=("${parsed_threads}")
+done
 
 manifest_sha256="$(shasum -a 256 "${manifest}" | awk '{print $1}')"
 study_label="empirical-manifest-${manifest_sha256}-minbrlen-${minimum_branch_length}"
-echo "# empirical_manifest=$(basename "${manifest}")"
-echo "# empirical_manifest_sha256=${manifest_sha256}"
-echo "# study=${study_label}"
-if [[ -f "${metadata}" ]]; then
-  while IFS= read -r line; do
-    [[ -n "${line}" ]] && echo "# ${line}"
-  done < "${metadata}"
-else
-  echo "# corpus_metadata=not supplied; provenance must accompany the manifest"
-fi
-echo "# pattern_compression=exact duplicate columns, prepared before benchmarking"
-echo "# benchmark_mode=${benchmark_mode}"
-echo "# conditioning_ms=${conditioning_ms}"
-echo "# minimum_branch_length=${minimum_branch_length}"
-echo "# branch_length_policy=max(source length, minimum_branch_length)"
-echo "# requested_site_batches=${requested_site_batches[*]}"
-echo "# capacity_policy=ascending site batches in isolated, host-memory-bounded children"
-echo "# host_memory_guard_kib=${host_memory_guard_kib}"
 
 site_batches_for() {
   local unique_patterns="$1"
@@ -147,59 +156,129 @@ while IFS=$'\t' read -r dataset taxa raw_sites unique_patterns alignment \
     total_cases=$((total_cases + 1))
   done < <(site_batches_for "${unique_patterns}")
 done < "${rows_file}"
-echo "# planned_cases=${total_cases}"
 
-completed_cases=0
+if [[ "${#methods[@]}" -eq 1 ]]; then
+  method_order_policy=single-method
+else
+  method_order_policy="cyclic rotation by empirical dataset/site-batch case"
+fi
+
+emit_protocol() {
+  local method_index="$1"
+  local protocol_method="${methods[method_index]}"
+  local protocol_threads="${method_threads[method_index]}"
+  echo "# empirical_manifest=$(basename "${manifest}")"
+  echo "# empirical_manifest_sha256=${manifest_sha256}"
+  echo "# study=${study_label}"
+  if [[ -f "${metadata}" ]]; then
+    while IFS= read -r line; do
+      [[ -n "${line}" ]] && echo "# ${line}"
+    done < "${metadata}"
+  else
+    echo "# corpus_metadata=not supplied; provenance must accompany the manifest"
+  fi
+  echo "# pattern_compression=exact duplicate columns, prepared before benchmarking"
+  echo "# benchmark_mode=${benchmark_mode}"
+  echo "# conditioning_ms=${conditioning_ms}"
+  echo "# minimum_branch_length=${minimum_branch_length}"
+  echo "# branch_length_policy=max(source length, minimum_branch_length)"
+  echo "# requested_site_batches=${requested_site_batches[*]}"
+  echo "# planned_cases=${total_cases}"
+  echo "# capacity_policy=ascending site batches in isolated, host-memory-bounded children"
+  echo "# host_memory_guard_kib=${host_memory_guard_kib}"
+  echo "# method_order_policy=${method_order_policy}"
+  echo "# declared_method_sequence=${method_specs[*]}"
+  echo "# progress method=${protocol_method} precision=${precision_label}" \
+    "study=${study_label} benchmark_mode=${benchmark_mode}" \
+    "requested_site_batches=${requested_site_batches[*]}" \
+    "planned_cases=${total_cases}" \
+    "threads=${protocol_threads:-none}"
+}
+
+completed_cases=()
+protocol_emitted=()
+for index in "${!methods[@]}"; do
+  completed_cases[index]=0
+  protocol_emitted[index]=0
+done
+case_index=0
 cd "${repository}"
 while IFS=$'\t' read -r dataset taxa raw_sites unique_patterns alignment \
   pattern_weights tree; do
-  benchmark_capacity_exhausted=0
-  benchmark_capacity_dataset="${dataset}"
-  benchmark_capacity_study="${study_label}"
-  benchmark_capacity_mode="${benchmark_mode}"
-  benchmark_capacity_threads="${resume_threads:-none}"
+  method_exhausted=()
+  for index in "${!methods[@]}"; do
+    method_exhausted[index]=0
+  done
   while IFS= read -r site_batch; do
-    completed_cases=$((completed_cases + 1))
-    echo "# progress case=${completed_cases}/${total_cases} method=${method}" \
-      "precision=${precision_label} dataset=${dataset}" \
-      "site_batch=${site_batch}"
-    if benchmark_resume_capacity_reached "${resume_report}" "${method}" \
-      "${precision_label}" "${site_batch}" "${dataset}" \
-      "${benchmark_mode}" "${resume_threads:-none}" "${study_label}"; then
-      echo "# resume_capacity_limit method=${method}" \
-        "precision=${precision_label} dataset=${dataset}" \
-        "site_batch=${site_batch}"
-      break
-    fi
-    if benchmark_resume_dataset_batch_completed "${resume_report}" \
-      "${method}" "${precision_label}" "${dataset}" "${site_batch}" \
-      "${benchmark_mode}" "${resume_threads}" "${study_label}"; then
-      echo "# resume_skip method=${method} precision=${precision_label}" \
-        "dataset=${dataset} site_batch=${site_batch}"
-      continue
-    fi
-    echo "# benchmark_start method=${method} precision=${precision_label}" \
-      "dataset=${dataset} taxa=${taxa} raw_sites=${raw_sites}" \
-      "unique_patterns=${unique_patterns} site_batch=${site_batch}"
-    if [[ "${dry_run}" == 1 ]]; then
-      continue
-    fi
-    command=("bazel-bin/${target}")
-    if [[ "${#extra[@]}" -ne 0 ]]; then
-      command+=("${extra[@]}")
-    fi
-    benchmark_run_capacity_bounded "${work_directory}" \
-      "${host_memory_guard_kib}" "${method}" "${precision_label}" \
-      "${site_batch}" "${command[@]}" \
-      --newick "${root}/${tree}" --fasta "${root}/${alignment}" \
-      --pattern-weights "${root}/${pattern_weights}" \
-      --dataset-label "${dataset}" --site-batch "${site_batch}" \
-      --minimum-branch-length "${minimum_branch_length}" \
-      --conditioning-ms "${conditioning_ms}" \
-      --repeats "${repeats}" --benchmark-mode "${benchmark_mode}" \
-      --study-label "${study_label}"
-    if [[ "${benchmark_capacity_exhausted}" == 1 ]]; then
-      break
-    fi
+    for ((order_index = 0; order_index < ${#methods[@]}; ++order_index)); do
+      method_index=$(((case_index + order_index) % ${#methods[@]}))
+      [[ "${method_exhausted[method_index]}" == 0 ]] || continue
+      method="${methods[method_index]}"
+      resume_threads="${method_threads[method_index]}"
+      completed_cases[method_index]=$((completed_cases[method_index] + 1))
+      if [[ "${protocol_emitted[method_index]}" == 0 ]]; then
+        emit_protocol "${method_index}"
+        protocol_emitted[method_index]=1
+      fi
+      echo "# progress case=${completed_cases[method_index]}/${total_cases}" \
+        "method=${method} precision=${precision_label} dataset=${dataset}" \
+        "site_batch=${site_batch} threads=${resume_threads:-none}"
+      if benchmark_resume_capacity_reached "${resume_report}" "${method}" \
+        "${precision_label}" "${site_batch}" "${dataset}" \
+        "${benchmark_mode}" "${resume_threads:-none}" "${study_label}"; then
+        echo "# resume_capacity_limit method=${method}" \
+          "precision=${precision_label} dataset=${dataset}" \
+          "site_batch=${site_batch} threads=${resume_threads:-none}"
+        method_exhausted[method_index]=1
+        continue
+      fi
+      if benchmark_resume_dataset_batch_completed "${resume_report}" \
+        "${method}" "${precision_label}" "${dataset}" "${site_batch}" \
+        "${benchmark_mode}" "${resume_threads}" "${study_label}"; then
+        echo "# resume_skip method=${method} precision=${precision_label}" \
+          "dataset=${dataset} site_batch=${site_batch}" \
+          "threads=${resume_threads:-none}"
+        continue
+      fi
+      echo "# benchmark_start method=${method} precision=${precision_label}" \
+        "dataset=${dataset} taxa=${taxa} raw_sites=${raw_sites}" \
+        "unique_patterns=${unique_patterns} site_batch=${site_batch}" \
+        "threads=${resume_threads:-none}"
+      if [[ "${dry_run}" == 1 ]]; then
+        continue
+      fi
+      case "${method}" in
+        cuda|rocm|metal)
+          command=("bazel-bin/${method}_benchmark")
+          ;;
+        beagle-cpu)
+          command=(bazel-bin/beagle_benchmark --beagle-resource cpu
+                   --beagle-threads "${resume_threads}")
+          ;;
+        beagle-cuda)
+          command=(bazel-bin/beagle_benchmark --beagle-resource cuda
+                   --beagle-threads 1)
+          ;;
+      esac
+      benchmark_capacity_exhausted=0
+      benchmark_capacity_dataset="${dataset}"
+      benchmark_capacity_study="${study_label}"
+      benchmark_capacity_mode="${benchmark_mode}"
+      benchmark_capacity_threads="${resume_threads:-none}"
+      benchmark_run_capacity_bounded "${work_directory}" \
+        "${host_memory_guard_kib}" "${method}" "${precision_label}" \
+        "${site_batch}" "${command[@]}" \
+        --newick "${root}/${tree}" --fasta "${root}/${alignment}" \
+        --pattern-weights "${root}/${pattern_weights}" \
+        --dataset-label "${dataset}" --site-batch "${site_batch}" \
+        --minimum-branch-length "${minimum_branch_length}" \
+        --conditioning-ms "${conditioning_ms}" \
+        --repeats "${repeats}" --benchmark-mode "${benchmark_mode}" \
+        --study-label "${study_label}"
+      if [[ "${benchmark_capacity_exhausted}" == 1 ]]; then
+        method_exhausted[method_index]=1
+      fi
+    done
+    case_index=$((case_index + 1))
   done < <(site_batches_for "${unique_patterns}")
 done < "${rows_file}"

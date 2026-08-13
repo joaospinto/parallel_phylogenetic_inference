@@ -61,19 +61,17 @@ fi
 
 if [[ -n "${TREE_HMM_EMPIRICAL_MANIFEST:-}" ]]; then
   for benchmark_mode in "${benchmark_modes[@]}"; do
-    PRECISION=fp32 TREE_HMM_BENCHMARK_MODE="${benchmark_mode}" \
-      TREE_HMM_BENCHMARK_CONDITIONING_MS="${conditioning_ms}" \
-      bash "${repo_dir}/scripts/benchmark_empirical_manifest.sh" metal \
-        "${TREE_HMM_EMPIRICAL_MANIFEST}"
+    empirical_methods=(metal)
     if [[ "${TREE_HMM_SKIP_BEAGLE:-0}" != 1 ]]; then
       for threads in "${beagle_cpu_threads[@]}"; do
-        PRECISION=fp32 TREE_HMM_BENCHMARK_MODE="${benchmark_mode}" \
-          TREE_HMM_BENCHMARK_CONDITIONING_MS="${conditioning_ms}" \
-          BEAGLE_THREADS="${threads}" \
-          bash "${repo_dir}/scripts/benchmark_empirical_manifest.sh" \
-            beagle-cpu "${TREE_HMM_EMPIRICAL_MANIFEST}"
+        empirical_methods+=("beagle-cpu:${threads}")
       done
     fi
+    PRECISION=fp32 TREE_HMM_BENCHMARK_MODE="${benchmark_mode}" \
+      TREE_HMM_BENCHMARK_CONDITIONING_MS="${conditioning_ms}" \
+      bash "${repo_dir}/scripts/benchmark_empirical_manifest.sh" \
+        --interleave "${TREE_HMM_EMPIRICAL_MANIFEST}" \
+        "${empirical_methods[@]}"
   done
 fi
 echo "=== Apple device ==="

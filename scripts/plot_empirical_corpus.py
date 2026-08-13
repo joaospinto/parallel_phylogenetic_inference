@@ -30,6 +30,8 @@ class DriverProtocol:
     benchmark_mode: str
     requested_site_batches: tuple[int, ...]
     planned_cases: int
+    method_order_policy: str
+    declared_method_sequence: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,8 @@ class CoverageDeclaration:
     kind: str
     requested_site_batches: tuple[int, ...]
     planned_cases: int
+    method_order_policy: str
+    declared_method_sequence: tuple[str, ...]
 
 
 def key_values(text: str) -> dict[str, str]:
@@ -189,6 +193,8 @@ def parse_protocol(
                                     pending_pandit["selected_families"],
                                     "selected PANDIT family count",
                                 ),
+                                method_order_policy="not-applicable",
+                                declared_method_sequence=(),
                             )
                         )
                     pending_pandit = None
@@ -219,6 +225,8 @@ def parse_protocol(
                     "benchmark_mode",
                     "requested_site_batches",
                     "planned_cases",
+                    "method_order_policy",
+                    "declared_method_sequence",
                 }
                 combined = pending | progress
                 missing = required - set(combined)
@@ -250,6 +258,10 @@ def parse_protocol(
                             planned_cases=positive_integer(
                                 combined["planned_cases"], "planned case count"
                             ),
+                            method_order_policy=combined["method_order_policy"],
+                            declared_method_sequence=tuple(
+                                combined["declared_method_sequence"].split()
+                            ),
                         )
                     )
                 pending = None
@@ -262,6 +274,8 @@ def parse_protocol(
                     "benchmark_mode",
                     "requested_site_batches",
                     "planned_cases",
+                    "method_order_policy",
+                    "declared_method_sequence",
                 }:
                     continue
                 if key in pending and pending[key] != value:
@@ -345,7 +359,13 @@ def validate_declared_batch_coverage(
     dict[tuple[str, tuple[str, ...]], tuple[int, ...]], CoverageDeclaration
 ]:
     protocol_values = {
-        (protocol.kind, protocol.requested_site_batches, protocol.planned_cases)
+        (
+            protocol.kind,
+            protocol.requested_site_batches,
+            protocol.planned_cases,
+            protocol.method_order_policy,
+            protocol.declared_method_sequence,
+        )
         for protocol in protocols
         if protocol.method in {coarse_method(method) for method in selected_methods}
         and protocol.precision == precision
@@ -369,9 +389,43 @@ def validate_declared_batch_coverage(
         )
     if len(protocol_values) != 1:
         raise ValueError(
-            "selected methods declare different requested batches or planned coverage"
+            "selected methods declare different scheduling or planned coverage"
         )
-    protocol_kind, requested, planned_cases = next(iter(protocol_values))
+    protocol_kind, requested, planned_cases, order_policy, method_sequence = next(
+        iter(protocol_values)
+    )
+    if protocol_kind == "manifest":
+        if order_policy != "cyclic rotation by empirical dataset/site-batch case":
+            raise ValueError(
+                "publication empirical comparisons require case-level cyclic "
+                "method ordering"
+            )
+
+        def exact_declared_method(specification: str) -> str:
+            if specification in NATIVE_METHODS:
+                return specification
+            if specification == "beagle-cuda":
+                return "beagle_cuda"
+            match = re.fullmatch(r"beagle-cpu:([1-9][0-9]*)", specification)
+            if match is not None:
+                return f"beagle_cpu_{match.group(1)}t"
+            raise ValueError(
+                "unsupported method in declared empirical schedule: "
+                f"{specification!r}"
+            )
+
+        declared_exact = tuple(
+            exact_declared_method(specification)
+            for specification in method_sequence
+        )
+        if len(set(declared_exact)) != len(declared_exact):
+            raise ValueError("declared empirical method schedule contains duplicates")
+        undeclared = set(selected_methods) - set(declared_exact)
+        if undeclared:
+            raise ValueError(
+                "selected empirical methods are absent from the interleaved schedule: "
+                + ", ".join(sorted(undeclared))
+            )
 
     by_method_problem: dict[
         tuple[str, tuple[str, ...]], list[dict[str, object]]
@@ -473,7 +527,13 @@ def validate_declared_batch_coverage(
             if not observed:
                 raise ValueError(f"{method} has no feasible declared batch for {dataset}")
             candidates[(method, key)] = observed
-    return candidates, CoverageDeclaration(protocol_kind, requested, planned_cases)
+    return candidates, CoverageDeclaration(
+        protocol_kind,
+        requested,
+        planned_cases,
+        order_policy,
+        method_sequence,
+    )
 
 
 def parse_taxa_bin_edges(text: str) -> tuple[float, ...]:
@@ -901,6 +961,9 @@ def main() -> None:
         f"taxa_bin_edges={arguments.taxa_bin_edges}",
         f"minimum_violin_count={arguments.minimum_violin_count}",
         f"coverage_declaration={coverage.kind}",
+        f"method_order_policy={coverage.method_order_policy}",
+        "declared_method_sequence="
+        + " ".join(coverage.declared_method_sequence),
         "requested_site_batches="
         + (
             " ".join(str(value) for value in coverage.requested_site_batches)

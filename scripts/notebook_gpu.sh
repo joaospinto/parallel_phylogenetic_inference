@@ -620,15 +620,7 @@ for precision in "${precisions[@]}"; do
     for manifest in "${empirical_manifests[@]}"; do
       echo "# attached_empirical_manifest=${manifest}"
       for benchmark_mode in "${empirical_benchmark_modes[@]}"; do
-        PRECISION="${precision_config}" \
-          TREE_HMM_BENCHMARK_MODE="${benchmark_mode}" \
-          TREE_HMM_BENCHMARK_CONDITIONING_MS="${conditioning_ms}" \
-          TREE_HMM_EMPIRICAL_MINIMUM_BRANCH_LENGTH="${empirical_minimum_branch_length}" \
-          TREE_HMM_EMPIRICAL_REPEATS="${empirical_repeats}" \
-          TREE_HMM_RESUME_REPORT="${resume_report}" \
-          TREE_HMM_HOST_MEMORY_GUARD_PERCENT="${host_memory_guard_percent}" \
-          bash "${repo_dir}/scripts/benchmark_empirical_manifest.sh" \
-            "${accelerator_backend}" "${manifest}"
+        empirical_methods=("${accelerator_backend}")
         if [[ "${TREE_HMM_SKIP_BEAGLE:-0}" != "1" ]]; then
           for resource in "${beagle_resources[@]}"; do
             if [[ "${resource}" == cpu ]]; then
@@ -637,19 +629,23 @@ for precision in "${precisions[@]}"; do
               resource_threads=(1)
             fi
             for threads in "${resource_threads[@]}"; do
-              PRECISION="${precision_config}" \
-                TREE_HMM_BENCHMARK_MODE="${benchmark_mode}" \
-                TREE_HMM_BENCHMARK_CONDITIONING_MS="${conditioning_ms}" \
-                TREE_HMM_EMPIRICAL_MINIMUM_BRANCH_LENGTH="${empirical_minimum_branch_length}" \
-                TREE_HMM_EMPIRICAL_REPEATS="${empirical_repeats}" \
-                TREE_HMM_RESUME_REPORT="${resume_report}" \
-                TREE_HMM_HOST_MEMORY_GUARD_PERCENT="${host_memory_guard_percent}" \
-                BEAGLE_THREADS="${threads}" \
-                bash "${repo_dir}/scripts/benchmark_empirical_manifest.sh" \
-                  "beagle-${resource}" "${manifest}"
+              if [[ "${resource}" == cpu ]]; then
+                empirical_methods+=("beagle-cpu:${threads}")
+              else
+                empirical_methods+=("beagle-${resource}")
+              fi
             done
           done
         fi
+        PRECISION="${precision_config}" \
+          TREE_HMM_BENCHMARK_MODE="${benchmark_mode}" \
+          TREE_HMM_BENCHMARK_CONDITIONING_MS="${conditioning_ms}" \
+          TREE_HMM_EMPIRICAL_MINIMUM_BRANCH_LENGTH="${empirical_minimum_branch_length}" \
+          TREE_HMM_EMPIRICAL_REPEATS="${empirical_repeats}" \
+          TREE_HMM_RESUME_REPORT="${resume_report}" \
+          TREE_HMM_HOST_MEMORY_GUARD_PERCENT="${host_memory_guard_percent}" \
+          bash "${repo_dir}/scripts/benchmark_empirical_manifest.sh" \
+            --interleave "${manifest}" "${empirical_methods[@]}"
       done
     done
   fi

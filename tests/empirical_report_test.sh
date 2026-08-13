@@ -18,6 +18,8 @@ cat > "${report}" <<EOF
 # benchmark_mode=full-input-update
 # requested_site_batches=64 256
 # planned_cases=7
+# method_order_policy=cyclic rotation by empirical dataset/site-batch case
+# declared_method_sequence=cuda beagle-cpu:1 beagle-cuda
 # progress case=1/7 method=cuda precision=FP32 dataset=problem-a site_batch=64
 backend,precision,benchmark_mode,study,dataset,topology,minimum_branch_length,floored_branch_count,leaves,nodes,sites,unique_patterns,site_batch,cpu_ms,measured_total_ms,max_abs_error,max_relative_error
 cuda,FP32,full-input-update,${study},problem-a,empirical,0.000001,0,100,199,1000,100,64,8,2,0.001,0.0001
@@ -32,6 +34,8 @@ cuda,FP32,full-input-update,${study},problem-c,empirical,0.000001,0,5000,9999,40
 # benchmark_mode=full-input-update
 # requested_site_batches=64 256
 # planned_cases=7
+# method_order_policy=cyclic rotation by empirical dataset/site-batch case
+# declared_method_sequence=cuda beagle-cpu:1 beagle-cuda
 # progress case=1/7 method=beagle-cpu precision=FP32 dataset=problem-a site_batch=64
 baseline,beagle_resource,precision,benchmark_mode,study,dataset,topology,minimum_branch_length,floored_branch_count,leaves,nodes,sites,unique_patterns,site_batch,threads,sequential_ms,beagle_total_ms,max_abs_error,max_relative_error
 beagle,cpu,FP32,full-input-update,${study},problem-a,empirical,0.000001,0,100,199,1000,100,64,1,8,2,0.001,0.0001
@@ -46,6 +50,8 @@ beagle,cpu,FP32,full-input-update,${study},problem-c,empirical,0.000001,0,5000,9
 # benchmark_mode=full-input-update
 # requested_site_batches=64 256
 # planned_cases=7
+# method_order_policy=cyclic rotation by empirical dataset/site-batch case
+# declared_method_sequence=cuda beagle-cpu:1 beagle-cuda
 # progress case=1/7 method=beagle-cuda precision=FP32 dataset=problem-a site_batch=64
 baseline,beagle_resource,precision,benchmark_mode,study,dataset,topology,minimum_branch_length,floored_branch_count,leaves,nodes,sites,unique_patterns,site_batch,threads,sequential_ms,beagle_total_ms,max_abs_error,max_relative_error
 beagle,cuda,FP32,full-input-update,${study},problem-a,empirical,0.000001,0,100,199,1000,100,64,1,8,1.5,0.001,0.0001
@@ -83,6 +89,19 @@ grep -Fq 'batch_selection=minimum median complete-alignment wall time' \
   "$(find "${cpu_output}" -name 'empirical_protocol_*.txt')"
 grep -Fq 'declared_cases_per_method=7' \
   "$(find "${cpu_output}" -name 'empirical_protocol_*.txt')"
+grep -Fq 'method_order_policy=cyclic rotation by empirical dataset/site-batch case' \
+  "$(find "${cpu_output}" -name 'empirical_protocol_*.txt')"
+grep -Fq 'declared_method_sequence=cuda beagle-cpu:1 beagle-cuda' \
+  "$(find "${cpu_output}" -name 'empirical_protocol_*.txt')"
+
+sequential_order_report="${work_directory}/sequential-order.txt"
+sed 's/method_order_policy=cyclic rotation by empirical dataset\/site-batch case/method_order_policy=single-method/' \
+  "${report}" > "${sequential_order_report}"
+if run_report "${sequential_order_report}" cuda beagle-cpu \
+     "${work_directory}/sequential-order" --beagle-threads 1 >/dev/null 2>&1; then
+  echo "empirical report accepted a non-interleaved method schedule" >&2
+  exit 1
+fi
 
 cuda_output="${work_directory}/beagle-cuda"
 run_report "${report}" cuda beagle-cuda "${cuda_output}"
@@ -92,6 +111,7 @@ grep -Fq ',beagle_cuda,' \
 for backend in metal rocm; do
   backend_report="${work_directory}/${backend}.txt"
   sed -e "s/method=cuda/method=${backend}/" \
+      -e "s/declared_method_sequence=cuda /declared_method_sequence=${backend} /" \
       -e "s/^cuda,/${backend},/" "${report}" > "${backend_report}"
   run_report "${backend_report}" "${backend}" beagle-cpu \
     "${work_directory}/${backend}" --beagle-threads 1
