@@ -31,6 +31,15 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def dataset_id(relative: Path) -> str:
+    source = relative.as_posix()
+    readable = re.sub(r"[^A-Za-z0-9_.-]+", "_", source).strip("_.-")
+    if not readable:
+        readable = "dataset"
+    digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:12]
+    return f"{readable}-{digest}"
+
+
 def append_fragment(sequence: str, fragment: str, sites: int) -> str:
     fragment = "".join(fragment.split()).upper()
     if not fragment or not set(fragment) <= DNA:
@@ -225,10 +234,14 @@ def main() -> None:
     arguments.output.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, object]] = []
     exclusions: list[tuple[str, str]] = []
+    identifiers: set[str] = set()
     alignments = sorted(arguments.raw.rglob("alignment.phy"))
     for alignment in alignments:
         relative = alignment.parent.relative_to(arguments.raw)
-        dataset = re.sub(r"[^A-Za-z0-9_.-]+", "_", alignment.parent.name)
+        dataset = dataset_id(relative)
+        if dataset in identifiers:
+            raise RuntimeError(f"internal dataset-identifier collision: {dataset}")
+        identifiers.add(dataset)
         parquet = alignment.parent / "pars_summary.parquet"
         try:
             if not parquet.is_file():

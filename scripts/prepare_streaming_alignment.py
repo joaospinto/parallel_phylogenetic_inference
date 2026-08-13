@@ -75,12 +75,29 @@ def quoted_label(text: str, position: int) -> tuple[str, int]:
     raise ValueError("unterminated quoted Newick label")
 
 
+def first_newick_tree(text: str) -> int:
+    position = 0
+    while position < len(text):
+        if text[position].isspace():
+            position += 1
+        elif text[position] == "[":
+            depth = 1
+            position += 1
+            while position < len(text) and depth:
+                depth += (text[position] == "[") - (text[position] == "]")
+                position += 1
+            if depth:
+                raise ValueError("unterminated Newick comment")
+        elif text[position] == "(":
+            return position
+        else:
+            raise ValueError("unexpected text before Newick tree")
+    raise ValueError("tree file contains no Newick tree")
+
+
 def normalize_arb_tree(path: Path) -> tuple[str, list[str]]:
     source = path.read_text(encoding="utf-8")
-    start = source.find("(")
-    if start < 0:
-        raise ValueError("tree file contains no Newick tree")
-    source = source[start:]
+    source = source[first_newick_tree(source) :]
     output: list[str] = []
     leaves: list[str] = []
     position = 0

@@ -51,6 +51,16 @@ int main() {
   Check(caterpillar_shape.height == kLeaves - 1);
   Check(caterpillar_shape.normalized_colless == 1.0);
 
+  // Deep synthetic families use an explicit construction stack rather than
+  // the process call stack.
+  constexpr std::size_t kLargeLeaves = 32768;
+  for (const std::string topology : {"beta-critical", "caterpillar"}) {
+    const SyntheticTopology large =
+        MakeSyntheticTopology(topology, kLargeLeaves, 31);
+    Check(large.parents.size() == 2 * kLargeLeaves - 1);
+    Check(large.leaves.size() == kLargeLeaves);
+  }
+
   const auto patterns = MakeUniquePatterns(257, 8, 123);
   Check(patterns.size() == 257 * 8);
   for (std::size_t left = 0; left < 257; ++left) {

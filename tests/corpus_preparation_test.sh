@@ -24,7 +24,7 @@ with zipfile.ZipFile(root / "alignment.zip", "w") as archive:
     archive.write(root / "alignment.fasta", "alignment.fasta")
 PY
 cat > "${work}/tree.ntree" <<'EOF'
-[ARB comment]
+[ARB comment containing a misleading ( parenthesis]
 (('A, (metadata)':0.1,B:0.2):0.3,C:0.4);
 EOF
 python3 "${root}/scripts/prepare_streaming_alignment.py" \
@@ -40,6 +40,22 @@ assert summary["taxa"] == 3
 assert summary["coordinates"] == 6
 assert summary["retained_coordinates"] == 2
 assert summary["minimum_observed_taxa"] == 2
+PY
+python3 - "${root}" <<'PY'
+import importlib.util
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1]) / "scripts" / "prepare_dryad_corpus.py"
+spec = importlib.util.spec_from_file_location("prepare_dryad_corpus", path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+assert module.dataset_id(pathlib.Path("first/shared")) != module.dataset_id(
+    pathlib.Path("second/shared")
+)
+assert module.dataset_id(pathlib.Path("first/shared")) == module.dataset_id(
+    pathlib.Path("first/shared")
+)
 PY
 # A second run must reuse the exact-source first-pass checkpoint.
 python3 "${root}/scripts/prepare_streaming_alignment.py" \

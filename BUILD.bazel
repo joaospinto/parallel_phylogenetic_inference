@@ -20,7 +20,10 @@ sh_test(
 sh_test(
     name = "corpus_preparation_test",
     srcs = ["tests/corpus_preparation_test.sh"],
-    data = ["scripts/prepare_streaming_alignment.py"],
+    data = [
+        "scripts/prepare_dryad_corpus.py",
+        "scripts/prepare_streaming_alignment.py",
+    ],
 )
 
 config_setting(

@@ -133,26 +133,36 @@ inline SyntheticTopology MakeGrowthTopology(std::string_view topology,
   return result;
 }
 
-inline btrc::Index BuildSyntheticSubtree(std::string_view topology,
-                                         std::size_t leaf_count,
-                                         std::int64_t parent,
-                                         DeterministicRandom &random,
-                                         std::span<const double> harmonic_numbers,
-                                         SyntheticTopology &tree) {
-  if (tree.parents.size() > std::numeric_limits<btrc::Index>::max())
-    throw std::length_error("synthetic tree exceeds the planner index limit");
-  const auto node = static_cast<btrc::Index>(tree.parents.size());
-  tree.parents.push_back(parent);
-  if (leaf_count == 1) {
-    tree.leaves.push_back(node);
-    return node;
+inline void BuildSyntheticTree(std::string_view topology,
+                               std::size_t leaf_count,
+                               DeterministicRandom &random,
+                               std::span<const double> harmonic_numbers,
+                               SyntheticTopology &tree) {
+  struct PendingSubtree {
+    std::size_t leaves;
+    std::int64_t parent;
+  };
+  std::vector<PendingSubtree> pending;
+  pending.reserve(2 * leaf_count - 1);
+  pending.push_back({leaf_count, -1});
+  while (!pending.empty()) {
+    const PendingSubtree subtree = pending.back();
+    pending.pop_back();
+    if (tree.parents.size() > std::numeric_limits<btrc::Index>::max())
+      throw std::length_error("synthetic tree exceeds the planner index limit");
+    const auto node = static_cast<btrc::Index>(tree.parents.size());
+    tree.parents.push_back(subtree.parent);
+    if (subtree.leaves == 1) {
+      tree.leaves.push_back(node);
+      continue;
+    }
+    const std::size_t left =
+        SampleSplit(topology, subtree.leaves, random, harmonic_numbers);
+    // LIFO order preserves the recursive generator's left-before-right draw
+    // order without consuming the host call stack on deep trees.
+    pending.push_back({subtree.leaves - left, node});
+    pending.push_back({left, node});
   }
-  const std::size_t left =
-      SampleSplit(topology, leaf_count, random, harmonic_numbers);
-  BuildSyntheticSubtree(topology, left, node, random, harmonic_numbers, tree);
-  BuildSyntheticSubtree(topology, leaf_count - left, node, random,
-                        harmonic_numbers, tree);
-  return node;
 }
 
 inline SyntheticTopology MakeSyntheticTopology(std::string_view topology,
@@ -172,8 +182,7 @@ inline SyntheticTopology MakeSyntheticTopology(std::string_view topology,
   for (std::size_t index = 1; index < leaves; ++index)
     harmonic_numbers[index] =
         harmonic_numbers[index - 1] + 1.0 / static_cast<double>(index);
-  BuildSyntheticSubtree(topology, leaves, -1, random, harmonic_numbers,
-                        result);
+  BuildSyntheticTree(topology, leaves, random, harmonic_numbers, result);
   return result;
 }
 
