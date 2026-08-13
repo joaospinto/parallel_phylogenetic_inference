@@ -21,5 +21,8 @@ build:cuda --@rules_cuda//cuda:enable=true
 build:cuda --@rules_cuda//cuda:compiler=nvcc
 common --flag_alias=cuda_archs=@rules_cuda//cuda:archs
 
+build:rocm --@parallel_tree_hmm//:enable_rocm=true
+common --flag_alias=rocm_arch=@parallel_tree_hmm//:rocm_arch
+
 build -c opt
 common --enable_platform_specific_config

@@ -8,9 +8,11 @@ sh_test(
     name = "benchmark_shell_test",
     srcs = ["tests/benchmark_shell_test.sh"],
     data = [
-        "scripts/kaggle_cuda_notebook.sh",
+        "scripts/accelerator_environment.sh",
         "scripts/benchmark_resume.sh",
         "scripts/capacity_bounded.sh",
+        "scripts/kaggle_accelerator_notebook.sh",
+        "scripts/kaggle_cuda_notebook.sh",
         "tests/benchmark_report_fixture.txt",
     ],
 )
@@ -19,6 +21,12 @@ config_setting(
     name = "macos_fp32",
     constraint_values = ["@platforms//os:osx"],
     flag_values = {"@parallel_tree_hmm//:precision": "fp32"},
+)
+
+config_setting(
+    name = "rocm_enabled_linux",
+    constraint_values = ["@platforms//os:linux"],
+    flag_values = {"@parallel_tree_hmm//:enable_rocm": "true"},
 )
 
 cc_library(
@@ -53,8 +61,12 @@ cc_library(
     srcs = [
         "src/accelerator_internal.h",
         "src/cuda.cc",
+        "src/gpu_backend_impl.inc",
     ],
-    hdrs = ["include/parallel_phylogenetics/cuda.h"],
+    hdrs = [
+        "include/parallel_phylogenetics/cuda.h",
+        "include/parallel_phylogenetics/detail/gpu_backend_api.inc",
+    ],
     includes = ["include"],
     target_compatible_with = requires_cuda(),
     visibility = ["//visibility:public"],
@@ -64,11 +76,97 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "parallel_phylogenetics_cuda_stub",
+    srcs = [
+        "src/accelerator_internal.h",
+        "src/cuda.cc",
+        "src/gpu_backend_impl.inc",
+    ],
+    hdrs = [
+        "include/parallel_phylogenetics/cuda.h",
+        "include/parallel_phylogenetics/detail/gpu_backend_api.inc",
+    ],
+    includes = ["include"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":parallel_phylogenetics",
+        "@parallel_tree_hmm//:tree_hmm_cuda_stub",
+    ],
+)
+
+cc_library(
+    name = "parallel_phylogenetics_rocm",
+    srcs = [
+        "src/accelerator_internal.h",
+        "src/gpu_backend_impl.inc",
+        "src/rocm.cc",
+    ],
+    hdrs = [
+        "include/parallel_phylogenetics/detail/gpu_backend_api.inc",
+        "include/parallel_phylogenetics/rocm.h",
+    ],
+    includes = ["include"],
+    target_compatible_with = select({
+        ":rocm_enabled_linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//visibility:public"],
+    deps = [
+        ":parallel_phylogenetics",
+        "@parallel_tree_hmm//:tree_hmm_rocm",
+    ],
+)
+
+cc_library(
+    name = "parallel_phylogenetics_rocm_stub",
+    srcs = [
+        "src/accelerator_internal.h",
+        "src/gpu_backend_impl.inc",
+        "src/rocm.cc",
+    ],
+    hdrs = [
+        "include/parallel_phylogenetics/detail/gpu_backend_api.inc",
+        "include/parallel_phylogenetics/rocm.h",
+    ],
+    includes = ["include"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":parallel_phylogenetics",
+        "@parallel_tree_hmm//:tree_hmm_rocm_stub",
+    ],
+)
+
+cc_test(
+    name = "cuda_api_test",
+    srcs = [
+        "tests/accelerator_test.h",
+        "tests/cuda_test.cc",
+        "tests/gpu_backend_test.inc",
+    ],
+    deps = [
+        ":parallel_phylogenetics_cuda_stub",
+    ],
+)
+
+cc_test(
+    name = "rocm_api_test",
+    srcs = [
+        "tests/accelerator_test.h",
+        "tests/gpu_backend_test.inc",
+        "tests/rocm_test.cc",
+    ],
+    deps = [
+        ":parallel_phylogenetics_rocm_stub",
+    ],
+)
+
 cc_test(
     name = "cuda_test",
     srcs = [
         "tests/accelerator_test.h",
         "tests/cuda_test.cc",
+        "tests/gpu_backend_test.inc",
     ],
     tags = [
         "manual",
@@ -78,6 +176,27 @@ cc_test(
     deps = [
         ":parallel_phylogenetics",
         ":parallel_phylogenetics_cuda",
+    ],
+)
+
+cc_test(
+    name = "rocm_test",
+    srcs = [
+        "tests/accelerator_test.h",
+        "tests/gpu_backend_test.inc",
+        "tests/rocm_test.cc",
+    ],
+    tags = [
+        "manual",
+        "requires-gpu",
+    ],
+    target_compatible_with = select({
+        ":rocm_enabled_linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":parallel_phylogenetics",
+        ":parallel_phylogenetics_rocm",
     ],
 )
 
@@ -137,11 +256,29 @@ cc_binary(
     srcs = [
         "benchmarks/benchmark.h",
         "benchmarks/cuda_benchmark.cc",
+        "benchmarks/gpu_backend_benchmark.inc",
     ],
     target_compatible_with = requires_cuda(),
     deps = [
         ":parallel_phylogenetics",
         "@parallel_tree_hmm//:tree_hmm_cuda",
+    ],
+)
+
+cc_binary(
+    name = "rocm_benchmark",
+    srcs = [
+        "benchmarks/benchmark.h",
+        "benchmarks/gpu_backend_benchmark.inc",
+        "benchmarks/rocm_benchmark.cc",
+    ],
+    target_compatible_with = select({
+        ":rocm_enabled_linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":parallel_phylogenetics",
+        "@parallel_tree_hmm//:tree_hmm_rocm",
     ],
 )
 

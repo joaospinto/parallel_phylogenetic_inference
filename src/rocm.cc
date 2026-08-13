@@ -1,0 +1,11 @@
+#include "parallel_phylogenetics/rocm.h"
+
+#include "tree_hmm/rocm.h"
+
+#define PARALLEL_PHYLOGENETICS_GPU_NAMESPACE rocm
+#define PARALLEL_PHYLOGENETICS_TREE_HMM_NAMESPACE rocm
+#define PARALLEL_PHYLOGENETICS_GPU_NAME "ROCm"
+#include "src/gpu_backend_impl.inc"
+#undef PARALLEL_PHYLOGENETICS_GPU_NAME
+#undef PARALLEL_PHYLOGENETICS_TREE_HMM_NAMESPACE
+#undef PARALLEL_PHYLOGENETICS_GPU_NAMESPACE

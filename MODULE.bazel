@@ -10,12 +10,11 @@ bazel_dep(name = "rules_shell", version = "0.8.0")
 bazel_dep(name = "bidirectional_tree_rake_compress", version = "0.1.0")
 bazel_dep(name = "parallel_tree_hmm", version = "0.1.0")
 
-cuda = use_extension("@rules_cuda//cuda:extensions.bzl", "toolchain")
-cuda.toolkit(
-    name = "cuda",
-    toolkit_path = "",
+accelerator_sdks = use_extension(
+    "@parallel_tree_hmm//toolchains:extensions.bzl",
+    "accelerator_sdks",
 )
-use_repo(cuda, "cuda")
+use_repo(accelerator_sdks, "cuda", "rocm_sdk")
 
 beagle = use_extension("//third_party/beagle:extension.bzl", "beagle")
 use_repo(beagle, "beagle")

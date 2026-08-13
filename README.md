@@ -4,7 +4,8 @@ This repository implements phylogenetic likelihood and ancestral-state
 inference on top of two independent reusable packages:
 
 - [`parallel_tree_hmm`](https://github.com/joaospinto/parallel_tree_hmm)
-  supplies prepared hidden Markov tree inference on CPU, Metal, and CUDA;
+  supplies prepared hidden Markov tree inference on CPU, Metal, CUDA, and
+  ROCm;
 - [`bidirectional_tree_rake_compress`](https://github.com/joaospinto/bidirectional_tree_rake_compress)
   supplies the topology planner and bidirectional rake–compress executor.
 
@@ -23,9 +24,11 @@ The current implementation provides:
 - conventional scaled Felsenstein pruning as an independent CPU baseline;
 - Newick and nucleotide FASTA input;
 - preallocated numerical workspaces for repeated likelihood evaluations;
-- phylogenetics-facing CUDA and Metal workspaces that select the appropriate
-  tree-HMM representation and handle capacity-bounded site batches;
-- native Metal and CUDA benchmark executables with numerical cross-checks.
+- phylogenetics-facing CUDA, ROCm, and Metal workspaces that select the
+  appropriate tree-HMM representation and handle capacity-bounded site
+  batches;
+- native Metal, CUDA, and ROCm benchmark executables with numerical
+  cross-checks.
 
 The optional `beagle_benchmark` target compares the same JC69 likelihood with
 the established BEAGLE library. BEAGLE is confined to benchmark code and is
@@ -35,14 +38,15 @@ FP32 or FP64 precision as this package; every result identifies the actual
 BEAGLE resource and implementation selected at runtime.
 
 Alignment conversion writes compact categorical observations directly into
-caller-provided accelerator input storage. CUDA uses pinned host buffers and
-Metal uses shared buffers, so the same generic tree-HMM call neither makes a
-second full-batch staging copy nor materializes dense node factors on the host.
+caller-provided accelerator input storage. CUDA and ROCm use pinned host
+buffers, while Metal uses shared buffers, so the same generic tree-HMM call
+neither makes a second full-batch staging copy nor materializes dense node
+factors on the host.
 
-CPU and CUDA use the same compile-time `Scalar`: FP64 is the default, and FP32
-is a separate pure-precision build. Metal is FP32-only. Benchmark rows report
-their precision and compare the CPU and accelerator implementations in that
-same precision.
+CPU, CUDA, and ROCm use the same compile-time `Scalar`: FP64 is the default,
+and FP32 is a separate pure-precision build. Metal is FP32-only. Benchmark rows
+report their precision and compare the CPU and accelerator implementations in
+that same precision.
 
 Applications do not need to prepare generic tree-HMM factors themselves. For
 example, a prepared CUDA evaluation is:
@@ -56,11 +60,11 @@ std::span<const parallel_phylogenetics::Scalar> log_likelihoods =
     parallel_phylogenetics::cuda::LogLikelihoodsPrepared(model, workspace);
 ```
 
-The corresponding Metal interface differs only in the namespace and has no
-device argument. Both backends stage compact categorical observations and call
-the same backend-neutral tree-HMM contraction executor. Repeated prepared
-calls do not resize numerical workspace storage or reconstruct the topology
-plan.
+The ROCm interface differs only in its namespace. The corresponding Metal
+interface also has no device argument. All three backends stage compact
+categorical observations and call the same backend-neutral tree-HMM
+contraction executor. Repeated prepared calls do not resize numerical
+workspace storage or reconstruct the topology plan.
 
 Recovery uses operation-specific workspaces so likelihood-only evaluations do
 not retain unnecessary reverse-pass data. For example, posterior marginals for
@@ -107,7 +111,23 @@ bazel run --config=fp64 --config=cuda --cuda_archs=sm_75 \
   --topology balanced --leaves 4096 --sites 1024 --repeats 5
 ```
 
-Both benchmark binaries accept empirical FASTA or relaxed sequential PHYLIP
+On Linux, one command validates the portable build policy. Bazel fetches
+pinned CUDA 12.8.1 and ROCm 7.2.3 SDKs and compiles both backends; the driver
+executes only the backend whose GPU is present. On macOS it builds and executes
+Metal without fetching either Linux SDK.
+
+```sh
+scripts/accelerator_driver.sh
+```
+
+The defaults can be narrowed without editing the script, for example:
+
+```sh
+TREE_HMM_BUILD_BACKENDS=rocm TREE_HMM_RUN_BACKENDS=none \
+  TREE_HMM_ROCM_ARCH=gfx942 scripts/accelerator_driver.sh
+```
+
+All three benchmark binaries accept empirical FASTA or relaxed sequential PHYLIP
 alignments:
 
 ```sh
@@ -130,10 +150,10 @@ PRECISION=fp64 scripts/benchmark_beagle.sh \
   --beagle-resource cpu --beagle-threads 1 --repeats 5
 ```
 
-On Linux, `scripts/install_beagle_cuda.sh` checksum-verifies and builds the
-pinned BEAGLE 4.0.1 release with its CUDA plugin. The optional local dependency
-is discovered through `BEAGLE_PREFIX`; ordinary Bazel targets remain buildable
-when BEAGLE is absent.
+On Linux, `scripts/install_beagle.sh` checksum-verifies and builds the pinned
+BEAGLE 4.0.1 release for the CPU and, when requested, with its CUDA plugin. The
+optional local dependency is discovered through `BEAGLE_PREFIX`; ordinary
+Bazel targets remain buildable when BEAGLE is absent.
 
 Warmup and workspace allocation are excluded. CPU and accelerator execution
 order alternates between repetitions to reduce order bias. The standard Metal
@@ -161,9 +181,10 @@ license](https://www.ebi.ac.uk/goldman-srv/pandit/Pandit/data/COPYRIGHT).
 
 `scripts/benchmark_pandit.sh` evaluates a deterministic subset selected from
 the generated manifest. By default it includes every family with at least 100
-tips; PANDIT 17.0 has 325 such families. It supports our Metal or CUDA backend
-and BEAGLE's CPU or CUDA backend, and accepts environment variables for the
-minimum tip count, repeat count, precision, and an optional smoke-test limit.
+tips; PANDIT 17.0 has 325 such families. It supports our Metal, CUDA, and ROCm
+backends and BEAGLE's CPU or CUDA backend, and accepts environment variables
+for the minimum tip count, repeat count, precision, and an optional smoke-test
+limit.
 `scripts/summarize_benchmarks.py` reads the CSV records embedded in the raw
 logs, takes medians across repeated records, selects the fastest measured site
 batch by a declared rule, and reports either the selected cases or paired
@@ -177,24 +198,28 @@ scripts/summarize_benchmarks.py report.txt \
 
 The Fish Tree of Life supplies a much larger empirical nucleotide case with
 11,638 taxa and 24,143 sites. `scripts/fetch_fish_tree.sh` downloads and
-checksum-verifies its published RAxML tree and full alignment. The CUDA
+checksum-verifies its published RAxML tree and full alignment. The accelerator
 notebook evaluates the complete alignment at several prepared site-batch
 capacities; it does not truncate or replicate the data.
 
 ## Reproducible accelerator runs
 
-`scripts/benchmark_metal.sh` runs the standard local scaling sweep. For CUDA,
-`notebooks/kaggle_cuda_benchmark.ipynb` records machine information, executes
-the host and emulated-kernel tests, validates the native CUDA implementation
-with Compute Sanitizer, and then runs the same balanced and caterpillar sweep.
-It additionally compares against pinned BEAGLE 4.0.1 on the CPU and CUDA
-device and evaluates the 325-family PANDIT subset and complete Fish Tree of
-Life alignment in matched FP64 and FP32. For capacity-bounded alignment runs,
-each method tries geometrically increasing site batches up to the complete
-alignment. Device-allocation failures stop only the affected CUDA sweep. CPU
-capacity probes run under a ceiling derived from the runtime memory limit, so
-an oversized probe fails in its child process rather than invoking the
-notebook-wide OOM killer. Unrelated failures remain fatal.
+`scripts/benchmark_metal.sh` runs the standard local Metal scaling sweep.
+`notebooks/kaggle_accelerator_benchmark.ipynb` detects an NVIDIA or AMD GPU,
+builds both Linux accelerator backends from checksum-pinned SDKs, executes the
+backend matching the detected device, and records the host and device
+configuration. CUDA execution is additionally checked with Compute Sanitizer.
+Before native execution, the launcher verifies that the host NVIDIA driver is
+new enough for the pinned CUDA toolkit or that the pinned ROCm runtime can
+enumerate the selected AMD device through the host kernel driver. The notebook
+compares against pinned BEAGLE 4.0.1 on the CPU and, on NVIDIA, the CUDA device,
+then evaluates the 325-family PANDIT subset and complete Fish Tree of Life
+alignment in matched FP64 and FP32. For capacity-bounded alignment runs, each
+method tries geometrically increasing site batches up to the complete
+alignment. Device-allocation failures stop only the affected accelerator
+sweep. CPU capacity probes run under a ceiling derived from the runtime memory
+limit, so an oversized probe fails in its child process rather than invoking
+the notebook-wide OOM killer. Unrelated failures remain fatal.
 
 Until these repositories are public, create the notebook input bundle from
 clean commits:

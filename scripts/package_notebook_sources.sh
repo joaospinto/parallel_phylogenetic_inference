@@ -9,12 +9,26 @@ resume_report="${2:-}"
 mkdir -p "$(dirname "${output}")"
 output="$(cd "$(dirname "${output}")" && pwd)/$(basename "${output}")"
 staging="$(mktemp -d "${TMPDIR:-/tmp}/tree-inference-package.XXXXXX")"
-trap 'rm -rf "${staging}"' EXIT
+archive_staging="$(
+  mktemp -d "$(dirname "${output}")/.tree-inference-archive.XXXXXX"
+)"
+trap 'rm -rf "${staging}" "${archive_staging}"' EXIT
 
 for repository in parallel_phylogenetic_inference parallel_tree_hmm \
                   bidirectional_tree_rake_compress; do
-  source_dir="${parent_dir}/${repository}"
-  if [[ ! -d "${source_dir}/.git" ]]; then
+  case "${repository}" in
+    parallel_phylogenetic_inference)
+      source_dir="${PARALLEL_PHYLOGENETIC_INFERENCE_SOURCE:-${parent_dir}/${repository}}"
+      ;;
+    parallel_tree_hmm)
+      source_dir="${PARALLEL_TREE_HMM_SOURCE:-${parent_dir}/${repository}}"
+      ;;
+    bidirectional_tree_rake_compress)
+      source_dir="${BIDIRECTIONAL_TREE_RAKE_COMPRESS_SOURCE:-${parent_dir}/${repository}}"
+      ;;
+  esac
+  if ! git -C "${source_dir}" rev-parse --is-inside-work-tree \
+      >/dev/null 2>&1; then
     echo "missing Git repository ${source_dir}" >&2
     exit 2
   fi
@@ -41,6 +55,7 @@ fi
 
 (
   cd "${staging}"
-  zip -q -r "${output}" .
+  zip -q -r "${archive_staging}/$(basename "${output}")" .
 )
+mv "${archive_staging}/$(basename "${output}")" "${output}"
 echo "${output}"

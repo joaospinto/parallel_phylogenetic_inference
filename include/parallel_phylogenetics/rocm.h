@@ -1,0 +1,8 @@
+#ifndef PARALLEL_PHYLOGENETICS_ROCM_H_
+#define PARALLEL_PHYLOGENETICS_ROCM_H_
+
+#define PARALLEL_PHYLOGENETICS_GPU_NAMESPACE rocm
+#include "parallel_phylogenetics/detail/gpu_backend_api.inc"
+#undef PARALLEL_PHYLOGENETICS_GPU_NAMESPACE
+
+#endif // PARALLEL_PHYLOGENETICS_ROCM_H_

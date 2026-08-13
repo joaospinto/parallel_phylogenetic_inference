@@ -11,6 +11,20 @@ report="${root}/tests/benchmark_report_fixture.txt"
 source "${root}/scripts/benchmark_resume.sh"
 # shellcheck source=scripts/capacity_bounded.sh
 source "${root}/scripts/capacity_bounded.sh"
+# shellcheck source=scripts/accelerator_environment.sh
+source "${root}/scripts/accelerator_environment.sh"
+
+tree_hmm_version_at_least 580.159.04 525.60.13
+tree_hmm_version_at_least 525.60.13 525.60.13
+tree_hmm_version_at_least 526.0 525.60.13
+! tree_hmm_version_at_least 525.59.99 525.60.13
+TREE_HMM_CUDA_DRIVER_VERSION_OVERRIDE=580.159.04 \
+  tree_hmm_check_cuda_driver_compatibility >/dev/null
+if TREE_HMM_CUDA_DRIVER_VERSION_OVERRIDE=520.0 \
+  tree_hmm_check_cuda_driver_compatibility >/dev/null 2>&1; then
+  echo "an incompatible CUDA driver was accepted" >&2
+  exit 1
+fi
 
 benchmark_resume_case_completed "${report}" cuda FP64 synthetic balanced \
   256 1024 1024
@@ -23,6 +37,7 @@ benchmark_resume_dataset_batch_completed "${report}" cuda FP64 \
 ! benchmark_resume_dataset_batch_completed "${report}" cuda FP64 \
   actinopt_12k_raxml 4096
 benchmark_resume_dataset_completed "${report}" metal FP32 PF00004
+benchmark_resume_dataset_completed "${report}" rocm FP32 PF00004
 benchmark_resume_capacity_reached "${report}" cuda FP64 4096
 benchmark_resume_capacity_reached "${report}" cuda FP64 8192
 ! benchmark_resume_capacity_reached "${report}" cuda FP64 2048
@@ -32,6 +47,71 @@ benchmark_resume_validation_completed "${report}" FP64
 
 work_directory="$(mktemp -d "${TMPDIR:-/tmp}/benchmark-shell-test.XXXXXX")"
 trap 'rm -rf "${work_directory}"' EXIT
+mock_rocm="${work_directory}/rocm"
+mkdir -p "${mock_rocm}/bin" "${mock_rocm}/lib"
+printf '%s\n' '#!/usr/bin/env bash' 'echo "  Name: gfx942"' > \
+  "${mock_rocm}/bin/rocminfo"
+chmod +x "${mock_rocm}/bin/rocminfo"
+TREE_HMM_ALLOW_MISSING_KFD_FOR_TESTS=1 \
+  tree_hmm_check_rocm_driver_compatibility "${mock_rocm}" gfx942 \
+  >/dev/null
+if TREE_HMM_ALLOW_MISSING_KFD_FOR_TESTS=1 \
+  tree_hmm_check_rocm_driver_compatibility "${mock_rocm}" gfx90a \
+  >/dev/null 2>&1; then
+  echo "a missing ROCm target architecture was accepted" >&2
+  exit 1
+fi
+mock_bazel_output="${work_directory}/bazel-output"
+mock_bazel_execroot="${mock_bazel_output}/execroot/main"
+mock_rocm_repository="${mock_bazel_output}/external/mock_rocm_sdk"
+mock_rocm_root="${mock_rocm_repository}/opt/rocm-7.2.3"
+mkdir -p "${mock_bazel_execroot}" "${mock_rocm_root}/lib/llvm/bin" \
+  "${mock_rocm_root}/bin" "${mock_rocm_root}/toolchain/bin"
+cat > "${mock_rocm_root}/lib/llvm/bin/amdllvm" <<'EOF'
+#!/usr/bin/env bash
+case "$(basename "$0")" in
+  amdclang|amdclang++) exit 0 ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "${mock_rocm_root}/lib/llvm/bin/amdllvm"
+ln -s amdllvm "${mock_rocm_root}/lib/llvm/bin/amdclang"
+ln -s amdllvm "${mock_rocm_root}/lib/llvm/bin/amdclang++"
+for executable in amdclang amdclang++; do
+  cat > "${mock_rocm_root}/toolchain/bin/${executable}" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+sdk_root="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")/../.." && pwd -P)"
+entry_point="\${sdk_root}/lib/llvm/bin/${executable}"
+exec -a "\${entry_point}" "\${entry_point}" "\$@"
+EOF
+  chmod +x "${mock_rocm_root}/toolchain/bin/${executable}"
+done
+cp "${mock_rocm}/bin/rocminfo" "${mock_rocm_root}/bin/rocminfo"
+mock_bazel="${work_directory}/bazel"
+cat > "${mock_bazel}" <<EOF
+#!/usr/bin/env bash
+case "\$1" in
+  cquery)
+    echo external/mock_rocm_sdk/opt/rocm-7.2.3/toolchain/bin/amdclang
+    ;;
+  info)
+    case "\${!#}" in
+      execution_root) echo "${mock_bazel_execroot}" ;;
+      output_base) echo "${mock_bazel_output}" ;;
+      *) exit 2 ;;
+    esac
+    ;;
+  *) exit 2 ;;
+esac
+EOF
+chmod +x "${mock_bazel}"
+tree_hmm_resolve_rocm_sdk "${mock_bazel}"
+[[ "${TREE_HMM_RESOLVED_AMDCLANG}" == \
+   "${mock_rocm_root}/toolchain/bin/amdclang" ]]
+[[ "${TREE_HMM_RESOLVED_ROCM_PATH}" == "${mock_rocm_root}" ]]
+"${TREE_HMM_RESOLVED_AMDCLANG}" --version
+"${TREE_HMM_RESOLVED_AMDCLANGXX}" --version
 benchmark_capacity_exhausted=0
 success_output="${work_directory}/success.txt"
 benchmark_run_capacity_bounded "${work_directory}" 262144 cuda FP32 1 \
@@ -92,13 +172,32 @@ mkdir -p "${source_root}/parallel_phylogenetic_inference/scripts" \
   "${source_root}/bidirectional_tree_rake_compress" "${working_root}"
 cp "${root}/scripts/kaggle_cuda_notebook.sh" \
   "${source_root}/parallel_phylogenetic_inference/scripts/"
+cp "${root}/scripts/kaggle_accelerator_notebook.sh" \
+  "${source_root}/parallel_phylogenetic_inference/scripts/"
+cp "${root}/scripts/accelerator_environment.sh" \
+  "${source_root}/parallel_phylogenetic_inference/scripts/"
+printf '%s\n' \
+  'parallel_phylogenetic_inference test-revision' \
+  'parallel_tree_hmm test-revision' \
+  'bidirectional_tree_rake_compress test-revision' > \
+  "${source_root}/SOURCE_REVISIONS.txt"
 cat > "${source_root}/parallel_phylogenetic_inference/scripts/notebook_cuda.sh" <<'EOF'
 #!/usr/bin/env bash
 printf 'stub precision=%s skip_fish=%s\n' \
   "${TREE_HMM_PRECISIONS}" "${TREE_HMM_SKIP_FISH_TREE:-0}"
 printf 'stub sections=%s\n' "${TREE_HMM_BENCHMARK_SECTIONS:-}"
 EOF
-printf 'previous-row\n' > "${source_root}/PREVIOUS_BENCHMARK_REPORT.txt"
+cat > "${source_root}/parallel_phylogenetic_inference/scripts/notebook_rocm.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'rocm stub precision=%s\n' "${TREE_HMM_PRECISIONS}"
+EOF
+cache_identity="$({
+  echo 'parallel-phylogenetics-benchmark-schema=3'
+  echo 'accelerator-backend=cuda'
+  sort "${source_root}/SOURCE_REVISIONS.txt"
+} | shasum -a 256 | awk '{ print $1 }')"
+printf '# cache_identity sha256=%s\nprevious-row\n' "${cache_identity}" > \
+  "${source_root}/PREVIOUS_BENCHMARK_REPORT.txt"
 TREE_HMM_NOTEBOOK_INPUT_DIR="${launcher_root}/input" \
 TREE_HMM_NOTEBOOK_WORKING_DIR="${working_root}" \
 TREE_HMM_PRECISIONS_OVERRIDE=FP32 TREE_HMM_SKIP_FISH_TREE=1 \
@@ -112,6 +211,16 @@ grep -Fq 'stub precision=FP32 skip_fish=1' \
   "${working_root}/parallel_phylogenetics_cuda_report.txt"
 grep -Fq 'stub sections=fish pandit' \
   "${working_root}/parallel_phylogenetics_cuda_report.txt"
+TREE_HMM_NOTEBOOK_INPUT_DIR="${launcher_root}/input" \
+TREE_HMM_NOTEBOOK_WORKING_DIR="${working_root}" \
+TREE_HMM_ACCELERATOR_BACKEND_OVERRIDE=rocm \
+TREE_HMM_PRECISIONS_OVERRIDE=FP32 \
+  bash "${root}/scripts/kaggle_accelerator_notebook.sh" "${source_root}" \
+  > "${launcher_root}/rocm.log"
+grep -Fq 'selected notebook accelerator: rocm' \
+  "${launcher_root}/rocm.log"
+grep -Fq 'rocm stub precision=FP32' \
+  "${working_root}/parallel_phylogenetics_rocm_report.txt"
 printf 'working-only-row\n' >> \
   "${working_root}/parallel_phylogenetics_cuda_report.txt"
 

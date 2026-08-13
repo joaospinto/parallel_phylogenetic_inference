@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -lt 1 || $# -gt 2 ]]; then
-  echo "usage: $0 {cuda|metal|beagle-cpu|beagle-cuda} [families-directory]" >&2
+  echo "usage: $0 {cuda|rocm|metal|beagle-cpu|beagle-cuda} [families-directory]" >&2
   exit 2
 fi
 backend="$1"
@@ -46,6 +46,8 @@ fi
 script_directory="${repository}/scripts"
 # shellcheck source=scripts/benchmark_resume.sh
 source "${script_directory}/benchmark_resume.sh"
+# shellcheck source=scripts/accelerator_environment.sh
+source "${script_directory}/accelerator_environment.sh"
 
 case "${backend}" in
   beagle-cpu|beagle-cuda)
@@ -56,6 +58,9 @@ case "${backend}" in
     ;;
   cuda)
     target=cuda_benchmark
+    ;;
+  rocm)
+    target=rocm_benchmark
     ;;
   metal)
     if [[ "${precision}" != fp32 ]]; then
@@ -74,11 +79,22 @@ cd "${repository}"
 if [[ "${PANDIT_SKIP_BUILD:-0}" != 1 ]]; then
   build_arguments=("--config=${precision}")
   if [[ "${backend}" == cuda ]]; then
-    if [[ -z "${TREE_HMM_CUDA_ARCH:-}" ]]; then
-      echo "TREE_HMM_CUDA_ARCH is required when building the CUDA runner" >&2
-      exit 2
-    fi
-    build_arguments+=(--config=cuda "--cuda_archs=sm_${TREE_HMM_CUDA_ARCH}")
+    cuda_arch="$(tree_hmm_detect_cuda_arch)"
+    tree_hmm_check_cuda_driver_compatibility
+    build_arguments+=(--config=cuda "--cuda_archs=sm_${cuda_arch}")
+  elif [[ "${backend}" == rocm ]]; then
+    tree_hmm_resolve_rocm_sdk bazel
+    rocm_arch="$(tree_hmm_detect_rocm_arch)"
+    tree_hmm_check_rocm_driver_compatibility \
+      "${TREE_HMM_RESOLVED_ROCM_PATH}" "${rocm_arch}"
+    build_arguments+=(
+      --config=rocm
+      "--repo_env=CC=${TREE_HMM_RESOLVED_AMDCLANG}"
+      "--repo_env=CXX=${TREE_HMM_RESOLVED_AMDCLANGXX}"
+      "--action_env=ROCM_PATH=${TREE_HMM_RESOLVED_ROCM_PATH}"
+      "--rocm_arch=${rocm_arch}"
+    )
+    export LD_LIBRARY_PATH="${TREE_HMM_RESOLVED_ROCM_PATH}/lib:${LD_LIBRARY_PATH:-}"
   fi
   bazel build "//:${target}" "${build_arguments[@]}"
 fi

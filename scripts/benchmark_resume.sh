@@ -17,7 +17,7 @@ benchmark_resume_case_completed() {
     -v dataset="${dataset}" -v topology="${topology}" \
     -v leaves="${leaves}" -v sites="${sites}" \
     -v site_batch="${site_batch}" '
-      method == "cuda" || method == "metal" {
+      method == "cuda" || method == "rocm" || method == "metal" {
         if ($1 == method && $2 == precision && $3 == dataset &&
             $4 == topology && $5 == leaves && $7 == sites &&
             $8 == site_batch) found = 1
@@ -42,7 +42,7 @@ benchmark_resume_dataset_batch_completed() {
   [[ -n "${report}" && -r "${report}" ]] || return 1
   awk -F, -v method="${method}" -v precision="${precision}" \
     -v dataset="${dataset}" -v site_batch="${site_batch}" '
-      method == "cuda" || method == "metal" {
+      method == "cuda" || method == "rocm" || method == "metal" {
         if ($1 == method && $2 == precision && $3 == dataset &&
             $8 == site_batch) found = 1
         next
@@ -64,7 +64,7 @@ benchmark_resume_dataset_completed() {
   [[ -n "${report}" && -r "${report}" ]] || return 1
   awk -F, -v method="${method}" -v precision="${precision}" \
     -v dataset="${dataset}" '
-      method == "cuda" || method == "metal" {
+      method == "cuda" || method == "rocm" || method == "metal" {
         if ($1 == method && $2 == precision && $3 == dataset) found = 1
         next
       }
@@ -96,14 +96,24 @@ benchmark_resume_capacity_reached() {
 benchmark_resume_validation_completed() {
   local report="$1"
   local precision="$2"
+  local backend="${3:-}"
   [[ -n "${report}" && -r "${report}" ]] || return 1
-  if grep -Fq "# validation_complete precision=${precision}" "${report}"; then
+  if [[ -n "${backend}" ]] &&
+     grep -Fq "# validation_complete backend=${backend} precision=${precision}" \
+       "${report}"; then
     return 0
+  fi
+  if grep -Fq "# validation_complete precision=${precision}" "${report}"; then
+    [[ -z "${backend}" || "${backend}" == cuda ]]
+    return
   fi
   # Reports produced before explicit completion markers are reusable only if
   # both the validation start and the subsequent scaling section are present.
   # A benchmark-only run therefore cannot masquerade as a validated run.
-  grep -Fq "=== ${precision} host tests, including CUDA algebra emulation ===" \
-    "${report}" &&
+  [[ -z "${backend}" || "${backend}" == cuda ]] &&
+    { grep -Fq "=== ${precision} host tests, including device algebra ===" \
+      "${report}" ||
+    grep -Fq "=== ${precision} host tests, including CUDA algebra emulation ===" \
+      "${report}"; } &&
     grep -Fq "=== ${precision} CUDA scaling benchmark ===" "${report}"
 }
