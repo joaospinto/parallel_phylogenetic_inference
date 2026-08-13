@@ -324,13 +324,16 @@ repeat-count overrides, sanitizer controls, and memory-guard overrides remain
 available.
 
 For a prespecified broad empirical cohort,
-`scripts/prepare_dryad_corpus.py` imports all 222 DNA alignments in Dryad
+`scripts/prepare_dryad_corpus.py` imports all 222 alignments in the pinned
+archive's `empirical-long/dna_long_empirical` cohort from Dryad
 10.5061/dryad.8gtht76zz. For each alignment it selects the maximum finite
 log-likelihood row among `version == "standard"` in the corresponding
 `pars_summary.parquet`, verifies exact tree/alignment taxon agreement, performs
 exact duplicate-column compression, and records source and normalized hashes.
-Selection is independent of benchmark timing. PyArrow is needed only while
-creating this compact manifest; benchmark runtime remains dependency-free.
+Records in the archive's separate `unsuccessful_MSAs` directory are not part of
+this cohort. Selection is independent of benchmark timing. PyArrow is needed
+only while creating this compact manifest; benchmark runtime remains
+dependency-free.
 
 The public TreeBASE Mirror used by the LvD study provides additional inferred
 trees and their original alignments. The following workflow makes a blobless,

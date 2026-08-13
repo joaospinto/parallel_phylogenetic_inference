@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Build the prespecified Dryad TreeBASE DNA likelihood corpus.
+"""Build the prespecified Dryad empirical-long DNA likelihood corpus.
 
-Every discovered ``alignment.phy`` is considered.  For each data set, the
-tree is the deterministic maximum-log-likelihood row among rows whose
-``version`` is ``standard`` in ``pars_summary.parquet``.  Eligibility never
-depends on a benchmark timing.
+Every ``alignment.phy`` in the archive's ``empirical-long/dna_long_empirical``
+cohort is considered.  For each data set, the tree is the deterministic
+maximum-log-likelihood row among rows whose ``version`` is ``standard`` in
+``pars_summary.parquet``.  Eligibility never depends on benchmark timing.
+Similarly named records under ``unsuccessful_MSAs`` are a separate cohort.
 """
 
 from __future__ import annotations
@@ -27,7 +28,11 @@ from corpus_common import (
 DOI = "10.5061/dryad.8gtht76zz"
 DRYAD_FILE_ID = "4142269"
 ARCHIVE_SHA256 = "06cee5bd75748acf5ba95a10b404b2867dd0b52a3e9e1b9ec357f9d9c7e09f4c"
-SELECTION_RULE = "all DNA alignment.phy entries; maximum-logLikelihood version=standard tree"
+COHORT_RELATIVE = Path("stopping_criteria_data/empirical-long/dna_long_empirical")
+SELECTION_RULE = (
+    "all alignment.phy entries in empirical-long/dna_long_empirical; "
+    "maximum-logLikelihood version=standard tree"
+)
 
 
 def append_fragment(sequence: str, fragment: str, sites: int) -> str:
@@ -99,6 +104,15 @@ def select_tree(parquet: Path) -> tuple[str, float]:
     return tree.rstrip(";\n") + ";\n", likelihood
 
 
+def cohort_alignments(raw: Path) -> list[Path]:
+    cohort = raw / COHORT_RELATIVE
+    if not cohort.is_dir():
+        raise FileNotFoundError(
+            f"pinned Dryad cohort directory is missing: {COHORT_RELATIVE}"
+        )
+    return sorted(cohort.rglob("alignment.phy"))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("raw", type=Path)
@@ -108,7 +122,7 @@ def main() -> None:
     rows: list[dict[str, object]] = []
     exclusions: list[tuple[str, str]] = []
     identifiers: set[str] = set()
-    alignments = sorted(arguments.raw.rglob("alignment.phy"))
+    alignments = cohort_alignments(arguments.raw)
     for alignment in alignments:
         relative = alignment.parent.relative_to(arguments.raw)
         dataset = dataset_id(relative)

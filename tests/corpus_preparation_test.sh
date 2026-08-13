@@ -52,7 +52,7 @@ row = next(csv.DictReader(
 ))
 assert row["raw_sites"] == "5" and row["unique_patterns"] == "4"
 PY
-python3 - "${root}" <<'PY'
+python3 - "${root}" "${work}" <<'PY'
 import importlib.util
 import pathlib
 import sys
@@ -68,6 +68,15 @@ assert module.dataset_id(pathlib.Path("first/shared")) != module.dataset_id(
 assert module.dataset_id(pathlib.Path("first/shared")) == module.dataset_id(
     pathlib.Path("first/shared")
 )
+
+raw = pathlib.Path(sys.argv[2]) / "dryad-fixture"
+selected = raw / module.COHORT_RELATIVE / "selected"
+excluded = raw / "stopping_criteria_data" / "unsuccessful_MSAs" / "duplicate"
+selected.mkdir(parents=True)
+excluded.mkdir(parents=True)
+(selected / "alignment.phy").touch()
+(excluded / "alignment.phy").touch()
+assert module.cohort_alignments(raw) == [selected / "alignment.phy"]
 PY
 
 # A miniature immutable TreeBASE Mirror exercises DNA filtering, exact taxon
