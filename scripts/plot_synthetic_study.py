@@ -7,8 +7,12 @@ import argparse
 import csv
 import math
 import statistics
+import sys
 from collections import defaultdict
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from validate_interleaved_schedule import validate_interleaved_schedule
 
 
 def validate_run_identity(paths: list[Path], override: str | None) -> str:
@@ -170,6 +174,14 @@ def main() -> None:
         help="pattern count used for the replicate-distribution panel (default: largest matched count)",
     )
     parser.add_argument("--output-directory", type=Path, required=True)
+    parser.add_argument(
+        "--require-interleaved", action="store_true",
+        help="require and validate a complete cyclic case-level method schedule",
+    )
+    parser.add_argument(
+        "--validate-only", action="store_true",
+        help="validate and write paired CSV data without rendering figures",
+    )
     arguments = parser.parse_args()
     run_identity = validate_run_identity(arguments.logs, arguments.run_identity)
     expected_topologies, expected_leaves, expected_patterns, expected_count, \
@@ -179,6 +191,26 @@ def main() -> None:
         if arguments.max_relative_error is not None
         else (2e-3 if arguments.precision == "FP32" else 1e-10)
     )
+    expected_case_count = (
+        len(expected_topologies)
+        * len(expected_leaves)
+        * len(expected_patterns)
+        * expected_count
+    )
+    if arguments.require_interleaved:
+        baseline_specification = (
+            f"beagle-cpu:{arguments.beagle_threads}"
+            if arguments.baseline == "beagle-cpu"
+            else "beagle-cuda"
+        )
+        validate_interleaved_schedule(
+            arguments.logs,
+            study="independent-taxa-pattern-grid",
+            precision=arguments.precision,
+            benchmark_mode=arguments.benchmark_mode,
+            expected_cases=expected_case_count,
+            required_methods={arguments.native, baseline_specification},
+        )
 
     selected_methods = {arguments.native, arguments.baseline}
     records = []
@@ -343,6 +375,9 @@ def main() -> None:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
         writer.writerows(paired)
+
+    if arguments.validate_only:
+        return
 
     import matplotlib.pyplot as plt
     import numpy as np

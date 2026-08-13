@@ -13,6 +13,10 @@
 # maximum_timing_repeats=3
 # timing_work_budget_node_sites=0
 # conditioning_ms=0
+# interleaved_schedule study=clock-like-jc69-simulation precision=FP32 benchmark_mode=full-input-update case_count=1 method_count=3 methods=cuda,metal,beagle-cpu:1 policy=cyclic-rotation-by-case
+# interleaved_case study=clock-like-jc69-simulation precision=FP32 benchmark_mode=full-input-update case_index=0 order_index=0 specification=cuda topology=yule leaves=32 raw_sites=8 evolutionary_root_to_tip_distance=0.001 replicate=0 timing_repeats=3
+# interleaved_case study=clock-like-jc69-simulation precision=FP32 benchmark_mode=full-input-update case_index=0 order_index=1 specification=metal topology=yule leaves=32 raw_sites=8 evolutionary_root_to_tip_distance=0.001 replicate=0 timing_repeats=3
+# interleaved_case study=clock-like-jc69-simulation precision=FP32 benchmark_mode=full-input-update case_index=0 order_index=2 specification=beagle-cpu:1 topology=yule leaves=32 raw_sites=8 evolutionary_root_to_tip_distance=0.001 replicate=0 timing_repeats=3
 backend,precision,benchmark_mode,study,dataset,topology,sequence_generation,evolutionary_root_to_tip_distance,seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,site_batch,tree_height,normalized_colless,structural_rounds,primitive_levels,primitive_operations,repeats,conditioning_ms,measured_total_ms,max_abs_error,max_relative_error
 cuda,FP32,full-input-update,clock-like-jc69-simulation,synthetic-jc69,yule,jc69,0.001,1,2,0,32,63,8,8,8,7,0.1,5,16,110,3,0,1,1e-6,1e-7
 metal,FP32,full-input-update,clock-like-jc69-simulation,synthetic-jc69,yule,jc69,0.001,1,2,0,32,63,8,8,8,7,0.1,5,16,110,3,0,9,999,999

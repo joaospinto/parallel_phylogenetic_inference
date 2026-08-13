@@ -81,6 +81,93 @@ if benchmark_resume_case_completed "${new_report}" cuda FP32 synthetic yule \
   exit 1
 fi
 
+distribution_dry_run="${work_directory}/distribution-interleaved.txt"
+TREE_HMM_DRY_RUN=1 TREE_HMM_DISTRIBUTION_TOPOLOGIES=yule \
+TREE_HMM_DISTRIBUTION_LEAVES='128 512' \
+TREE_HMM_DISTRIBUTION_PATTERNS='16 64' \
+TREE_HMM_DISTRIBUTION_REPLICATES=2 \
+  bash "${root}/scripts/benchmark_synthetic_distributions.sh" --interleave \
+    metal beagle-cpu:1 beagle-cpu:10 > "${distribution_dry_run}"
+grep -Fq '# planned_cases=8' "${distribution_dry_run}"
+grep -Fq '# planned_method_case_runs=24' "${distribution_dry_run}"
+[[ "$(grep -c '^# interleaved_case ' "${distribution_dry_run}")" == 24 ]]
+[[ "$(grep -c '^# benchmark_start_grid_cell ' "${distribution_dry_run}")" == 24 ]]
+python3 "${root}/scripts/validate_interleaved_schedule.py" \
+  "${distribution_dry_run}" --study independent-taxa-pattern-grid \
+  --precision FP32 --benchmark-mode full-input-update --expected-cases 8 \
+  --require-method metal --require-method beagle-cpu:1 \
+  --require-method beagle-cpu:10 >/dev/null
+{
+  awk '{ print } /^# interleaved_case / { seen += 1; if (seen == 2) exit }' \
+    "${distribution_dry_run}"
+  cat "${distribution_dry_run}"
+} > "${work_directory}/resumed-distribution-schedule.txt"
+python3 "${root}/scripts/validate_interleaved_schedule.py" \
+  "${work_directory}/resumed-distribution-schedule.txt" \
+  --study independent-taxa-pattern-grid --precision FP32 \
+  --benchmark-mode full-input-update --expected-cases 8 \
+  --require-method metal --require-method beagle-cpu:1 \
+  --require-method beagle-cpu:10 >/dev/null
+awk '
+  /^# interleaved_case / {
+    for (field = 3; field <= NF; ++field) {
+      split($field, pair, "=")
+      if (pair[1] == "specification") {
+        print pair[2]
+        observed += 1
+        if (observed == 9) exit
+      }
+    }
+  }
+' "${distribution_dry_run}" > \
+  "${work_directory}/distribution-method-order.txt"
+cat > "${work_directory}/expected-distribution-method-order.txt" <<'EOF'
+metal
+beagle-cpu:1
+beagle-cpu:10
+beagle-cpu:1
+beagle-cpu:10
+metal
+beagle-cpu:10
+metal
+beagle-cpu:1
+EOF
+diff -u "${work_directory}/expected-distribution-method-order.txt" \
+  "${work_directory}/distribution-method-order.txt"
+awk '
+  !changed && /^# interleaved_case / {
+    sub(/specification=metal/, "specification=beagle-cpu:10")
+    changed = 1
+  }
+  { print }
+' "${distribution_dry_run}" > "${work_directory}/bad-distribution-order.txt"
+if python3 "${root}/scripts/validate_interleaved_schedule.py" \
+     "${work_directory}/bad-distribution-order.txt" \
+     --study independent-taxa-pattern-grid --precision FP32 \
+     --benchmark-mode full-input-update --expected-cases 8 \
+     >/dev/null 2>&1; then
+  echo "interleaved schedule validator accepted a corrupt rotation" >&2
+  exit 1
+fi
+
+capacity_resume="${work_directory}/distribution-capacity.txt"
+cat > "${capacity_resume}" <<'EOF'
+# capacity_limit method=metal precision=FP32 dataset=synthetic-grid-yule-128-16 study=independent-taxa-pattern-grid benchmark_mode=full-input-update threads=none first_infeasible_site_batch=16 reason=allocation-failure
+EOF
+TREE_HMM_DRY_RUN=1 TREE_HMM_DISTRIBUTION_TOPOLOGIES=yule \
+TREE_HMM_DISTRIBUTION_LEAVES=128 TREE_HMM_DISTRIBUTION_PATTERNS=16 \
+TREE_HMM_DISTRIBUTION_REPLICATES=2 \
+TREE_HMM_RESUME_REPORT="${capacity_resume}" \
+  bash "${root}/scripts/benchmark_synthetic_distributions.sh" --interleave \
+    metal beagle-cpu:1 beagle-cpu:10 > \
+    "${work_directory}/distribution-capacity-dry-run.txt"
+[[ "$(grep -c 'status=resume-capacity-limit method=metal' \
+  "${work_directory}/distribution-capacity-dry-run.txt")" == 1 ]]
+[[ "$(grep -c 'status=capacity-skip method=metal' \
+  "${work_directory}/distribution-capacity-dry-run.txt")" == 1 ]]
+! grep -Fq '# benchmark_start_grid_cell method=metal' \
+  "${work_directory}/distribution-capacity-dry-run.txt"
+
 mixed_report="${work_directory}/mixed-report.txt"
 cat > "${mixed_report}" <<'EOF'
 backend,precision,task,dataset,topology,seed_base,seed,replicate,leaves,nodes,unique_patterns,tree_height,normalized_colless,primitive_levels,benchmark_mode,planning_ms,workspace_setup_ms,repeats,median_ms,p25_ms,p75_ms,samples_ms

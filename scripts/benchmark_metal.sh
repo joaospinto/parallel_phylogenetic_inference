@@ -28,6 +28,12 @@ if [[ "${TREE_HMM_SKIP_BEAGLE:-0}" != 1 ]]; then
   parallel_phylogenetics_configure_beagle
   bazel build //:beagle_benchmark --config=fp32
 fi
+controlled_methods=(metal)
+if [[ "${TREE_HMM_SKIP_BEAGLE:-0}" != 1 ]]; then
+  for threads in "${beagle_cpu_threads[@]}"; do
+    controlled_methods+=("beagle-cpu:${threads}")
+  done
+fi
 
 if [[ "${TREE_HMM_RUN_TASKS:-0}" == 1 ]]; then
   bazel build //:metal_tasks_benchmark --config=fp32
@@ -114,15 +120,17 @@ if [[ "${TREE_HMM_RUN_DISTRIBUTIONS:-0}" == 1 ]]; then
   for benchmark_mode in "${benchmark_modes[@]}"; do
     PRECISION=fp32 TREE_HMM_BENCHMARK_MODE="${benchmark_mode}" \
       TREE_HMM_BENCHMARK_CONDITIONING_MS="${conditioning_ms}" \
-      bash "${repo_dir}/scripts/benchmark_synthetic_distributions.sh" metal
-    if [[ "${TREE_HMM_SKIP_BEAGLE:-0}" != 1 ]]; then
-      for threads in "${beagle_cpu_threads[@]}"; do
-        PRECISION=fp32 TREE_HMM_BENCHMARK_MODE="${benchmark_mode}" \
-          TREE_HMM_BENCHMARK_CONDITIONING_MS="${conditioning_ms}" \
-          BEAGLE_THREADS="${threads}" \
-          bash "${repo_dir}/scripts/benchmark_synthetic_distributions.sh" \
-            beagle-cpu
-      done
-    fi
+      bash "${repo_dir}/scripts/benchmark_synthetic_distributions.sh" \
+        --interleave "${controlled_methods[@]}"
+  done
+fi
+
+if [[ "${TREE_HMM_RUN_JC69:-0}" == 1 ]]; then
+  for benchmark_mode in "${benchmark_modes[@]}"; do
+    PRECISION=fp32 TREE_HMM_JC69_PROFILE="${TREE_HMM_JC69_PROFILE:-paper}" \
+      TREE_HMM_BENCHMARK_MODE="${benchmark_mode}" \
+      TREE_HMM_BENCHMARK_CONDITIONING_MS="${conditioning_ms}" \
+      bash "${repo_dir}/scripts/benchmark_jc69_simulations.sh" \
+        --interleave "${controlled_methods[@]}"
   done
 fi

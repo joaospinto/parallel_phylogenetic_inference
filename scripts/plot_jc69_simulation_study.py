@@ -7,8 +7,12 @@ import argparse
 import csv
 import math
 import statistics
+import sys
 from collections import defaultdict
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from validate_interleaved_schedule import validate_interleaved_schedule
 
 
 STUDY = "clock-like-jc69-simulation"
@@ -235,6 +239,10 @@ def main() -> None:
         "--validate-only", action="store_true",
         help="validate and write paired CSV data without rendering figures",
     )
+    parser.add_argument(
+        "--require-interleaved", action="store_true",
+        help="require and validate a complete cyclic case-level method schedule",
+    )
     arguments = parser.parse_args()
     run_identity = validate_run_identity(arguments.logs, arguments.run_identity)
     (
@@ -255,6 +263,20 @@ def main() -> None:
         maximum_timing_repeats < minimum_timing_repeats
     ) or timing_work_budget < 0:
         raise ValueError("invalid JC69 timing-repeat declaration")
+    if arguments.require_interleaved:
+        baseline_specification = (
+            f"beagle-cpu:{arguments.beagle_threads}"
+            if arguments.baseline == "beagle-cpu"
+            else "beagle-cuda"
+        )
+        validate_interleaved_schedule(
+            arguments.logs,
+            study=STUDY,
+            precision=arguments.precision,
+            benchmark_mode=arguments.benchmark_mode,
+            expected_cases=declared_case_count,
+            required_methods={arguments.native, baseline_specification},
+        )
     max_relative_error = (
         arguments.max_relative_error
         if arguments.max_relative_error is not None

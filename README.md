@@ -182,6 +182,10 @@ CPU and accelerator or BEAGLE execution alternate between repetitions. For an
 empirical manifest, the driver additionally rotates the native and BEAGLE
 method order after every dataset/site-batch case, limiting corpus-scale thermal
 and temporal drift without combining their independent measurement paths. The
+independent-grid and JC69 drivers provide the same case-level policy through
+`--interleave`: each uniquely seeded replicate is one case, and the method
+that runs first rotates cyclically from case to case. Machine-readable schedule
+records make the exact order strictly auditable. The
 standard Metal sweep performs five seconds of untimed interleaved conditioning
 before each case to reduce thermal-state bias on passively cooled systems. The
 reported total accelerator time includes conversion from the phylogenetic
@@ -195,13 +199,16 @@ performance inputs, not draws from JC69. Raw repeats and tree-shape, planning,
 batch, and input-size metadata are retained in every CSV row:
 
 ```sh
-PRECISION=fp32 scripts/benchmark_synthetic_distributions.sh cuda
-PRECISION=fp32 TREE_HMM_BENCHMARK_MODE=factor-update \
-  BEAGLE_THREADS=1 scripts/benchmark_synthetic_distributions.sh beagle-cpu
-scripts/plot_synthetic_study.py native.log beagle.log \
-  --native cuda --baseline beagle-cpu --precision FP32 \
-  --benchmark-mode factor-update --run-identity same-machine-protocol \
-  --output-directory figures
+PRECISION=fp32 scripts/benchmark_synthetic_distributions.sh --interleave \
+  metal beagle-cpu:1 beagle-cpu:10 | tee distribution.log
+scripts/plot_synthetic_study.py distribution.log \
+  --native metal --baseline beagle-cpu --precision FP32 \
+  --benchmark-mode full-input-update --beagle-threads 1 \
+  --require-interleaved --output-directory figures/cpu1
+scripts/plot_synthetic_study.py distribution.log \
+  --native metal --baseline beagle-cpu --precision FP32 \
+  --benchmark-mode full-input-update --beagle-threads 10 \
+  --require-interleaved --output-directory figures/cpu10
 ```
 
 A complementary simulation study measures the same complete-likelihood
@@ -229,14 +236,17 @@ to 10,000 taxa and 100,000 sites for capacity studies. Individual axes,
 replicates, and repeat-budget parameters remain explicit overrides.
 
 ```sh
-PRECISION=fp32 scripts/benchmark_jc69_simulations.sh cuda
-PRECISION=fp32 BEAGLE_THREADS=1 \
-  scripts/benchmark_jc69_simulations.sh beagle-cpu
-scripts/plot_jc69_simulation_study.py native.log beagle.log \
-  --native cuda --baseline beagle-cpu --precision FP32 \
-  --output-directory figures
+PRECISION=fp32 TREE_HMM_JC69_PROFILE=paper \
+  scripts/benchmark_jc69_simulations.sh --interleave \
+  metal beagle-cpu:1 beagle-cpu:10 | tee jc69.log
+scripts/plot_jc69_simulation_study.py jc69.log \
+  --native metal --baseline beagle-cpu --precision FP32 \
+  --beagle-threads 1 --require-interleaved --output-directory figures/cpu1
+scripts/plot_jc69_simulation_study.py jc69.log \
+  --native metal --baseline beagle-cpu --precision FP32 \
+  --beagle-threads 10 --require-interleaved --output-directory figures/cpu10
 
-# Prespecified paper profile:
+# Legacy single-method and explicit capacity/stress invocations remain valid:
 TREE_HMM_JC69_PROFILE=paper PRECISION=fp32 \
   scripts/benchmark_jc69_simulations.sh cuda
 

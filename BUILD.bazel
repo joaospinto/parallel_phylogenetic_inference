@@ -12,13 +12,16 @@ sh_test(
         "scripts/beagle_environment.sh",
         "scripts/benchmark_empirical_manifest.sh",
         "scripts/benchmark_jc69_simulations.sh",
+        "scripts/benchmark_method_set.sh",
         "scripts/benchmark_resume.sh",
+        "scripts/benchmark_synthetic_distributions.sh",
         "scripts/capacity_bounded.sh",
         "scripts/empirical_manifest_rows.py",
         "scripts/kaggle_accelerator_notebook.sh",
         "scripts/kaggle_cuda_notebook.sh",
         "scripts/plot_synthetic_study.py",
         "scripts/summarize_benchmarks.py",
+        "scripts/validate_interleaved_schedule.py",
         "tests/benchmark_report_fixture.txt",
     ],
 )
@@ -47,9 +50,11 @@ sh_test(
     srcs = ["tests/jc69_plot_validation_test.sh"],
     data = [
         "scripts/benchmark_jc69_simulations.sh",
+        "scripts/benchmark_method_set.sh",
         "scripts/benchmark_resume.sh",
         "scripts/capacity_bounded.sh",
         "scripts/plot_jc69_simulation_study.py",
+        "scripts/validate_interleaved_schedule.py",
         "tests/jc69_plot_report_fixture.txt",
     ],
 )

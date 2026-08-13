@@ -271,6 +271,30 @@ benchmark_section_enabled() {
   [[ "${TREE_HMM_SKIP_BENCHMARKS:-0}" != "1" ]] && section_selected "$1"
 }
 
+initialize_interleaved_methods() {
+  interleaved_methods=("${accelerator_backend}")
+  if [[ "${TREE_HMM_SKIP_BEAGLE:-0}" == "1" ]]; then
+    return
+  fi
+  local resource
+  local threads
+  local -a resource_threads
+  for resource in "${beagle_resources[@]}"; do
+    if [[ "${resource}" == cpu ]]; then
+      resource_threads=("${beagle_cpu_thread_counts[@]}")
+    else
+      resource_threads=(1)
+    fi
+    for threads in "${resource_threads[@]}"; do
+      if [[ "${resource}" == cpu ]]; then
+        interleaved_methods+=("beagle-cpu:${threads}")
+      else
+        interleaved_methods+=("beagle-${resource}")
+      fi
+    done
+  done
+}
+
 if benchmark_section_enabled empirical; then
   if [[ "${#empirical_manifests[@]}" == 0 ]]; then
     echo "the empirical section requires TREE_HMM_EMPIRICAL_MANIFESTS" >&2
@@ -549,29 +573,16 @@ for precision in "${precisions[@]}"; do
 
   if benchmark_section_enabled distributions; then
     echo "=== ${precision} prespecified topology-distribution study ==="
+    initialize_interleaved_methods
     for benchmark_mode in "${benchmark_modes[@]}"; do
       PRECISION="${precision_config}" \
         TREE_HMM_BENCHMARK_MODE="${benchmark_mode}" \
+        TREE_HMM_BENCHMARK_CONDITIONING_MS="${conditioning_ms}" \
+        TREE_HMM_CAPACITY_WORK_DIR="${notebook_work_dir}" \
         TREE_HMM_RESUME_REPORT="${resume_report}" \
+        TREE_HMM_HOST_MEMORY_GUARD_PERCENT="${host_memory_guard_percent}" \
         bash "${repo_dir}/scripts/benchmark_synthetic_distributions.sh" \
-          "${accelerator_backend}"
-      if [[ "${TREE_HMM_SKIP_BEAGLE:-0}" != "1" ]]; then
-        for resource in "${beagle_resources[@]}"; do
-          if [[ "${resource}" == cpu ]]; then
-            resource_threads=("${beagle_cpu_thread_counts[@]}")
-          else
-            resource_threads=(1)
-          fi
-          for threads in "${resource_threads[@]}"; do
-            PRECISION="${precision_config}" \
-              TREE_HMM_BENCHMARK_MODE="${benchmark_mode}" \
-              BEAGLE_THREADS="${threads}" \
-              TREE_HMM_RESUME_REPORT="${resume_report}" \
-              bash "${repo_dir}/scripts/benchmark_synthetic_distributions.sh" \
-                "beagle-${resource}"
-          done
-        done
-      fi
+          --interleave "${interleaved_methods[@]}"
     done
   fi
 
@@ -580,6 +591,7 @@ for precision in "${precisions[@]}"; do
     if [[ "${TREE_HMM_SKIP_BEAGLE:-0}" != "1" ]]; then
       "${bazel_command}" build "${precision_args[@]}" //:beagle_benchmark
     fi
+    initialize_interleaved_methods
     for benchmark_mode in "${jc69_benchmark_modes[@]}"; do
       PRECISION="${precision_config}" \
         TREE_HMM_JC69_PROFILE="${TREE_HMM_JC69_PROFILE:-paper}" \
@@ -587,28 +599,9 @@ for precision in "${precisions[@]}"; do
         TREE_HMM_BENCHMARK_CONDITIONING_MS="${conditioning_ms}" \
         TREE_HMM_CAPACITY_WORK_DIR="${notebook_work_dir}" \
         TREE_HMM_RESUME_REPORT="${resume_report}" \
+        TREE_HMM_HOST_MEMORY_GUARD_PERCENT="${host_memory_guard_percent}" \
         bash "${repo_dir}/scripts/benchmark_jc69_simulations.sh" \
-          "${accelerator_backend}"
-      if [[ "${TREE_HMM_SKIP_BEAGLE:-0}" != "1" ]]; then
-        for resource in "${beagle_resources[@]}"; do
-          if [[ "${resource}" == cpu ]]; then
-            resource_threads=("${beagle_cpu_thread_counts[@]}")
-          else
-            resource_threads=(1)
-          fi
-          for threads in "${resource_threads[@]}"; do
-            PRECISION="${precision_config}" \
-              TREE_HMM_JC69_PROFILE="${TREE_HMM_JC69_PROFILE:-paper}" \
-              TREE_HMM_BENCHMARK_MODE="${benchmark_mode}" \
-              TREE_HMM_BENCHMARK_CONDITIONING_MS="${conditioning_ms}" \
-              TREE_HMM_CAPACITY_WORK_DIR="${notebook_work_dir}" \
-              TREE_HMM_RESUME_REPORT="${resume_report}" \
-              BEAGLE_THREADS="${threads}" \
-              bash "${repo_dir}/scripts/benchmark_jc69_simulations.sh" \
-                "beagle-${resource}"
-          done
-        done
-      fi
+          --interleave "${interleaved_methods[@]}"
     done
   fi
 
@@ -620,23 +613,7 @@ for precision in "${precisions[@]}"; do
     for manifest in "${empirical_manifests[@]}"; do
       echo "# attached_empirical_manifest=${manifest}"
       for benchmark_mode in "${empirical_benchmark_modes[@]}"; do
-        empirical_methods=("${accelerator_backend}")
-        if [[ "${TREE_HMM_SKIP_BEAGLE:-0}" != "1" ]]; then
-          for resource in "${beagle_resources[@]}"; do
-            if [[ "${resource}" == cpu ]]; then
-              resource_threads=("${beagle_cpu_thread_counts[@]}")
-            else
-              resource_threads=(1)
-            fi
-            for threads in "${resource_threads[@]}"; do
-              if [[ "${resource}" == cpu ]]; then
-                empirical_methods+=("beagle-cpu:${threads}")
-              else
-                empirical_methods+=("beagle-${resource}")
-              fi
-            done
-          done
-        fi
+        initialize_interleaved_methods
         PRECISION="${precision_config}" \
           TREE_HMM_BENCHMARK_MODE="${benchmark_mode}" \
           TREE_HMM_BENCHMARK_CONDITIONING_MS="${conditioning_ms}" \
@@ -645,7 +622,7 @@ for precision in "${precisions[@]}"; do
           TREE_HMM_RESUME_REPORT="${resume_report}" \
           TREE_HMM_HOST_MEMORY_GUARD_PERCENT="${host_memory_guard_percent}" \
           bash "${repo_dir}/scripts/benchmark_empirical_manifest.sh" \
-            --interleave "${manifest}" "${empirical_methods[@]}"
+            --interleave "${manifest}" "${interleaved_methods[@]}"
       done
     done
   fi
