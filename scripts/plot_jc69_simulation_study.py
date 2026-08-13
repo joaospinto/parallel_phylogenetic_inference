@@ -55,7 +55,15 @@ def method(row: dict[str, str]) -> str:
 
 
 def elapsed(row: dict[str, str]) -> float:
-    field = "end_to_end_ms" if "end_to_end_ms" in row else "beagle_total_ms"
+    field = (
+        "measured_total_ms"
+        if "measured_total_ms" in row
+        else "end_to_end_ms"
+        if "end_to_end_ms" in row
+        else "total_accelerator_ms"
+        if "total_accelerator_ms" in row
+        else "beagle_total_ms"
+    )
     return float(row[field])
 
 
@@ -82,10 +90,10 @@ def main() -> None:
     for row in read_rows(arguments.logs):
         if row["precision"] != arguments.precision:
             continue
+        if row.get("benchmark_mode", "full-input-update") != arguments.benchmark_mode:
+            continue
         row_method = method(row)
         if row_method == arguments.baseline:
-            if row.get("benchmark_mode") != arguments.benchmark_mode:
-                continue
             if int(row.get("threads", "1")) != arguments.beagle_threads:
                 continue
         records.append(row)

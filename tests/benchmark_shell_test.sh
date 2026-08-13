@@ -89,6 +89,9 @@ dataset,taxa,raw_sites,unique_patterns,alignment,pattern_weights,tree
 small,4,100,100,small.fa,small.weights,small.nwk
 large,10,100000,100000,large.fa,large.weights,large.nwk
 EOF
+for name in small.fa small.weights small.nwk large.fa large.weights large.nwk; do
+  printf '%s\n' fixture > "${manifest_directory}/${name}"
+done
 printf '%s\n' 'corpus_name=generic-test' > \
   "${manifest_directory}/corpus_metadata.txt"
 manifest_resume="${manifest_directory}/prior-report.txt"
@@ -113,8 +116,8 @@ grep -Fq '# resume_capacity_limit method=metal precision=FP32 dataset=large site
   "${manifest_directory}/dry-run.txt"
 
 cat >> "${new_report}" <<'EOF'
-backend,precision,dataset,topology,sequence_generation,evolutionary_root_to_tip_distance,seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,site_batch
-cuda,FP32,synthetic-jc69,yule,jc69,0.001,20260814,910,2,128,255,1024,813,813
+backend,precision,benchmark_mode,dataset,topology,sequence_generation,evolutionary_root_to_tip_distance,seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,site_batch
+cuda,FP32,full-input-update,synthetic-jc69,yule,jc69,0.001,20260814,910,2,128,255,1024,813,813
 baseline,beagle_resource,precision,benchmark_mode,dataset,topology,sequence_generation,evolutionary_root_to_tip_distance,seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,site_batch,threads
 beagle,cpu,FP32,full-input-update,synthetic-jc69,yule,jc69,0.001,20260814,910,2,128,255,1024,813,813,4
 EOF
@@ -122,6 +125,8 @@ benchmark_resume_jc69_replicate_completed "${new_report}" cuda FP32 yule \
   128 1024 0.001 20260814 2
 ! benchmark_resume_jc69_replicate_completed "${new_report}" cuda FP32 yule \
   128 1024 0.01 20260814 2
+! benchmark_resume_jc69_replicate_completed "${new_report}" cuda FP32 yule \
+  128 1024 0.001 20260814 2 factor-update
 ! benchmark_resume_jc69_replicate_completed "${new_report}" cuda FP32 yule \
   128 1024 0.001 20260814 3
 benchmark_resume_jc69_replicate_completed "${new_report}" beagle-cpu FP32 \

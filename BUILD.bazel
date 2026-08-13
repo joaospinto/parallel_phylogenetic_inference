@@ -12,6 +12,7 @@ sh_test(
         "scripts/benchmark_empirical_manifest.sh",
         "scripts/benchmark_resume.sh",
         "scripts/capacity_bounded.sh",
+        "scripts/empirical_manifest_rows.py",
         "scripts/kaggle_accelerator_notebook.sh",
         "scripts/kaggle_cuda_notebook.sh",
         "scripts/summarize_benchmarks.py",

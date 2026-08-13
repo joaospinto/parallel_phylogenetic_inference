@@ -171,6 +171,13 @@ benchmark_resume_jc69_replicate_completed() {
       }
       {
         resource = substr(method, 8)
+        mode_matches = 0
+        if (benchmark_mode == "")
+          mode_matches = 1
+        else if ("benchmark_mode" in column)
+          mode_matches = $(column["benchmark_mode"]) == benchmark_mode
+        else
+          mode_matches = benchmark_mode == "full-input-update"
         observed_height = ""
         if ("evolutionary_root_to_tip_distance" in column)
           observed_height = $(column["evolutionary_root_to_tip_distance"]) + 0
@@ -187,8 +194,7 @@ benchmark_resume_jc69_replicate_completed() {
             observed_height == evolutionary_height + 0 &&
             $(column["seed_base"]) == seed_base &&
             $(column["replicate"]) == replicate &&
-            (kind != "beagle" || benchmark_mode == "" ||
-             $(column["benchmark_mode"]) == benchmark_mode) &&
+            mode_matches &&
             (kind != "beagle" || threads == "" ||
              $(column["threads"]) == threads)) found = 1
       }

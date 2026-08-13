@@ -95,12 +95,8 @@ fi
 
 case "${method}" in
   cuda|rocm|metal)
-    if [[ "${benchmark_mode}" != full-input-update ]]; then
-      echo "native JC69 simulations currently expose only full-input-update; do not compare unlike modes" >&2
-      exit 2
-    fi
     target="${method}_benchmark"
-    resource_arguments=()
+    resource_arguments=(--benchmark-mode "${benchmark_mode}")
     resume_threads=""
     ;;
   beagle-cpu)

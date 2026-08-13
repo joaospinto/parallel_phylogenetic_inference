@@ -231,16 +231,6 @@ inline Options ParseOptions(int argc, char **argv) {
   return options;
 }
 
-inline InputUpdate BenchmarkInputUpdate(std::string_view mode) {
-  if (mode == "full-input-update")
-    return InputUpdate::kAll;
-  if (mode == "factor-update")
-    return InputUpdate::kFactors;
-  if (mode == "fixed-model")
-    return InputUpdate::kNone;
-  throw std::invalid_argument("unknown benchmark input-update mode");
-}
-
 inline std::vector<std::uint64_t>
 LoadPatternWeights(const std::filesystem::path &path,
                    std::size_t expected_patterns) {
