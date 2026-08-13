@@ -22,8 +22,8 @@ void CheckImpl(bool condition, int line) {
 int main() {
   using namespace parallel_phylogenetics::benchmark;
   constexpr std::size_t kLeaves = 64;
-  for (const std::string topology : {"balanced", "yule", "beta-critical",
-                                     "uniform", "caterpillar"}) {
+  for (const std::string topology :
+       {"balanced", "yule", "beta-critical", "uniform", "caterpillar"}) {
     const SyntheticTopology first = MakeSyntheticTopology(topology, kLeaves, 7);
     const SyntheticTopology second =
         MakeSyntheticTopology(topology, kLeaves, 7);
@@ -89,15 +89,33 @@ int main() {
   Check(SyntheticSeed(1, 64, 256, 0, "yule") !=
         SyntheticSeed(1, 64, 256, 1, "yule"));
 
+  for (const std::string topology :
+       {"balanced", "yule", "beta-critical", "uniform", "caterpillar"}) {
+    Options options;
+    options.topology = topology;
+    options.leaves = 64;
+    options.sites = 8;
+    const Problem problem = MakeProblem(options);
+    Check(std::is_sorted(problem.observation_nodes.begin(),
+                         problem.observation_nodes.end()));
+    Check(std::adjacent_find(problem.observation_nodes.begin(),
+                             problem.observation_nodes.end()) ==
+          problem.observation_nodes.end());
+  }
+
   Problem repeated;
   repeated.observation_nodes = {0, 1};
   repeated.sites = 4;
   repeated.raw_sites = 4;
   repeated.observations = {
-      parallel_phylogenetics::Nucleotide::kA, parallel_phylogenetics::Nucleotide::kC,
-      parallel_phylogenetics::Nucleotide::kG, parallel_phylogenetics::Nucleotide::kT,
-      parallel_phylogenetics::Nucleotide::kA, parallel_phylogenetics::Nucleotide::kC,
-      parallel_phylogenetics::Nucleotide::kG, parallel_phylogenetics::Nucleotide::kT,
+      parallel_phylogenetics::Nucleotide::kA,
+      parallel_phylogenetics::Nucleotide::kC,
+      parallel_phylogenetics::Nucleotide::kG,
+      parallel_phylogenetics::Nucleotide::kT,
+      parallel_phylogenetics::Nucleotide::kA,
+      parallel_phylogenetics::Nucleotide::kC,
+      parallel_phylogenetics::Nucleotide::kG,
+      parallel_phylogenetics::Nucleotide::kT,
   };
   CompressPatterns(repeated);
   Check(repeated.sites == 2);

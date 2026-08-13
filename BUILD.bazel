@@ -20,6 +20,16 @@ sh_test(
 )
 
 sh_test(
+    name = "task_benchmark_report_test",
+    srcs = ["tests/task_benchmark_report_test.sh"],
+    data = [
+        "scripts/summarize_benchmarks.py",
+        "scripts/summarize_task_benchmarks.py",
+        "tests/task_benchmark_report_fixture.txt",
+    ],
+)
+
+sh_test(
     name = "corpus_preparation_test",
     srcs = ["tests/corpus_preparation_test.sh"],
     data = [
@@ -82,6 +92,15 @@ cc_test(
         ":parallel_phylogenetics",
         "@bidirectional_tree_rake_compress//:btrc",
     ],
+)
+
+cc_test(
+    name = "cpu_task_reference_test",
+    srcs = [
+        "benchmarks/cpu_task_reference.h",
+        "tests/cpu_task_reference_test.cc",
+    ],
+    deps = [":parallel_phylogenetics"],
 )
 
 cc_library(
@@ -283,6 +302,7 @@ cc_binary(
     name = "metal_tasks_benchmark",
     srcs = [
         "benchmarks/benchmark.h",
+        "benchmarks/cpu_task_reference.h",
         "benchmarks/inference_tasks_benchmark.inc",
         "benchmarks/metal_tasks_benchmark.cc",
         "benchmarks/synthetic.h",
@@ -294,6 +314,7 @@ cc_binary(
     deps = [
         ":parallel_phylogenetics",
         ":parallel_phylogenetics_metal",
+        "@parallel_tree_hmm//:tree_hmm",
     ],
 )
 
@@ -315,13 +336,16 @@ cc_binary(
     name = "cuda_tasks_benchmark",
     srcs = [
         "benchmarks/benchmark.h",
+        "benchmarks/cpu_task_reference.h",
         "benchmarks/cuda_tasks_benchmark.cc",
         "benchmarks/inference_tasks_benchmark.inc",
         "benchmarks/synthetic.h",
     ],
     target_compatible_with = requires_cuda(),
     deps = [
+        ":parallel_phylogenetics",
         ":parallel_phylogenetics_cuda",
+        "@parallel_tree_hmm//:tree_hmm",
     ],
 )
 
@@ -346,6 +370,7 @@ cc_binary(
     name = "rocm_tasks_benchmark",
     srcs = [
         "benchmarks/benchmark.h",
+        "benchmarks/cpu_task_reference.h",
         "benchmarks/inference_tasks_benchmark.inc",
         "benchmarks/rocm_tasks_benchmark.cc",
         "benchmarks/synthetic.h",
@@ -355,7 +380,9 @@ cc_binary(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
+        ":parallel_phylogenetics",
         ":parallel_phylogenetics_rocm",
+        "@parallel_tree_hmm//:tree_hmm",
     ],
 )
 

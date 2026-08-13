@@ -193,6 +193,16 @@ inline Options ParseOptions(int argc, char **argv) {
   return options;
 }
 
+inline InputUpdate BenchmarkInputUpdate(std::string_view mode) {
+  if (mode == "full-input-update")
+    return InputUpdate::kAll;
+  if (mode == "factor-update")
+    return InputUpdate::kFactors;
+  if (mode == "fixed-model")
+    return InputUpdate::kNone;
+  throw std::invalid_argument("unknown benchmark input-update mode");
+}
+
 inline std::vector<std::uint64_t>
 LoadPatternWeights(const std::filesystem::path &path,
                    std::size_t expected_patterns) {
@@ -305,6 +315,11 @@ inline Problem MakeProblem(const Options &options, std::size_t replicate = 0) {
   const Clock::time_point planning_begin = Clock::now();
   btrc::Plan plan = btrc::MakePlan(topology.parents);
   const double planning_ms = Milliseconds(planning_begin, Clock::now());
+  // AlignmentModelView requires observation nodes in increasing plan order.
+  // Synthetic columns have no external taxon labels, so canonicalizing the
+  // leaf order before generating their observations changes no dataset
+  // semantics.
+  std::sort(topology.leaves.begin(), topology.leaves.end());
   std::vector<Scalar> lengths(plan.num_edges());
   for (std::size_t edge = 0; edge < lengths.size(); ++edge)
     lengths[edge] = Scalar{0.02} + Scalar{0.18} * static_cast<Scalar>(

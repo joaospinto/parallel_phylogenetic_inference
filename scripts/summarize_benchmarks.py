@@ -80,10 +80,14 @@ def records(paths: list[Path]) -> list[dict[str, str]]:
                     continue
                 fields = next(csv.reader([line]))
                 if fields[0] in {"backend", "baseline"}:
+                    # Inference-task records deliberately have a separate
+                    # schema and summarizer even though their first column is
+                    # also named backend.
                     header = (
                         fields
                         if "measured_total_ms" in fields
                         or "end_to_end_ms" in fields
+                        or "total_accelerator_ms" in fields
                         or "beagle_total_ms" in fields
                         else None
                     )

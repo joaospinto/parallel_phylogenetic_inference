@@ -220,7 +220,20 @@ row records the compact and partial tip counts.
 `cuda_tasks_benchmark`, `rocm_tasks_benchmark`, and
 `metal_tasks_benchmark` separately time likelihoods, all node and edge
 marginals, joint MAP assignments, and posterior samples through the public
-prepared APIs.
+prepared APIs. Each row also times the same task through the preallocated,
+scalar generic tree-HMM CPU algebra and checks the complete numerical output.
+The three input-update modes retain their application-level meanings on both
+sides. The report states the remaining implementation difference explicitly:
+the scalar generic CPU call consumes one preallocated dense site at a time,
+whereas an accelerator call evaluates the site batch. For example:
+
+```sh
+bazel run --config=fp32 //:metal_tasks_benchmark -- \
+  --topology yule --leaves 2048 --sites 64 --repeats 5 \
+  --benchmark-mode full-input-update > task-benchmarks.log
+scripts/summarize_task_benchmarks.py task-benchmarks.log \
+  --backend metal --precision FP32 --benchmark-mode full-input-update
+```
 
 ## Public data
 
