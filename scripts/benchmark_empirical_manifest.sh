@@ -10,6 +10,14 @@ manifest="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
 root="$(dirname "${manifest}")"
 repository="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 script_directory="${repository}/scripts"
+if [[ "${method}" == beagle-* ]]; then
+  # A parent macOS shell cannot reliably pass DYLD_LIBRARY_PATH through a new
+  # /bin/bash process. Configure the runtime in the process that launches the
+  # benchmark children.
+  # shellcheck source=scripts/beagle_environment.sh
+  source "${script_directory}/beagle_environment.sh"
+  parallel_phylogenetics_configure_beagle
+fi
 # shellcheck source=scripts/benchmark_resume.sh
 source "${script_directory}/benchmark_resume.sh"
 # shellcheck source=scripts/capacity_bounded.sh

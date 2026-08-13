@@ -1,6 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    echo "sha256sum or shasum is required" >&2
+    return 1
+  fi
+}
+
+logical_cpu_count() {
+  if command -v nproc >/dev/null 2>&1; then
+    nproc
+  elif command -v sysctl >/dev/null 2>&1; then
+    sysctl -n hw.logicalcpu
+  else
+    echo 1
+  fi
+}
+
 version="${BEAGLE_VERSION_LABEL:-4.1.0-pre-release-d1e9c62}"
 source_revision="${BEAGLE_SOURCE_REVISION:-d1e9c62f922cf544fda4555aedf113519367c07a}"
 source_url="${BEAGLE_SOURCE_URL:-https://github.com/beagle-dev/beagle-lib/archive/d1e9c62f922cf544fda4555aedf113519367c07a.tar.gz}"
@@ -134,14 +155,15 @@ fi
 archive="${work_root}/beagle-lib-${version}.tar.gz"
 build_directory="${work_root}/build-${archive_sha256}-${backend}"
 if [[ ! -f "${archive}" ]] ||
-   ! printf '%s  %s\n' "${archive_sha256}" "${archive}" |
-     sha256sum --check --status; then
+   [[ "$(sha256_of "${archive}")" != "${archive_sha256}" ]]; then
   temporary="${archive}.download"
   curl --fail --location --silent --show-error \
     "${source_url}" \
     --output "${temporary}"
-  printf '%s  %s\n' "${archive_sha256}" "${temporary}" |
-    sha256sum --check --status
+  if [[ "$(sha256_of "${temporary}")" != "${archive_sha256}" ]]; then
+    echo "BEAGLE archive SHA-256 mismatch" >&2
+    exit 1
+  fi
   mv "${temporary}" "${archive}"
 fi
 
@@ -187,10 +209,10 @@ cmake -S "${source_directory}" -B "${build_directory}" \
 if [[ "${backend}" == cuda ]]; then
   LIBRARY_PATH="${cuda_stub_directory}${LIBRARY_PATH:+:${LIBRARY_PATH}}" \
     cmake --build "${build_directory}" \
-      --parallel "${BEAGLE_BUILD_JOBS:-$(nproc)}"
+      --parallel "${BEAGLE_BUILD_JOBS:-$(logical_cpu_count)}"
 else
   cmake --build "${build_directory}" \
-    --parallel "${BEAGLE_BUILD_JOBS:-$(nproc)}"
+    --parallel "${BEAGLE_BUILD_JOBS:-$(logical_cpu_count)}"
 fi
 cmake --install "${build_directory}"
 {

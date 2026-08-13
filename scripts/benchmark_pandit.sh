@@ -7,6 +7,11 @@ if [[ $# -lt 1 || $# -gt 2 ]]; then
 fi
 backend="$1"
 repository="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ "${backend}" == beagle-* ]]; then
+  # shellcheck source=scripts/beagle_environment.sh
+  source "${repository}/scripts/beagle_environment.sh"
+  parallel_phylogenetics_configure_beagle
+fi
 families="${2:-${repository}/data/pandit/families}"
 manifest="${families}/manifest.csv"
 if [[ ! -f "${manifest}" ]]; then

@@ -8,6 +8,11 @@ fi
 method="$1"
 repository="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 script_directory="${repository}/scripts"
+if [[ "${method}" == beagle-* ]]; then
+  # shellcheck source=scripts/beagle_environment.sh
+  source "${script_directory}/beagle_environment.sh"
+  parallel_phylogenetics_configure_beagle
+fi
 # shellcheck source=scripts/benchmark_resume.sh
 source "${script_directory}/benchmark_resume.sh"
 

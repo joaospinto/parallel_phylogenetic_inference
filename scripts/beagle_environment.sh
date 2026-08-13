@@ -31,4 +31,7 @@ parallel_phylogenetics_configure_beagle() {
   local libraries="${BEAGLE_PREFIX}/lib:${BEAGLE_PREFIX}/lib64"
   libraries+="${libraries:+:}${BEAGLE_PREFIX}/lib/x86_64-linux-gnu"
   export LD_LIBRARY_PATH="${libraries}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+  if [[ "$(uname -s)" == Darwin ]]; then
+    export DYLD_LIBRARY_PATH="${libraries}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
+  fi
 }

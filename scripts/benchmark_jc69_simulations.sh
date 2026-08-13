@@ -7,6 +7,11 @@ if [[ $# -ne 1 ]]; then
 fi
 method="$1"
 repository="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ "${method}" == beagle-* ]]; then
+  # shellcheck source=scripts/beagle_environment.sh
+  source "${repository}/scripts/beagle_environment.sh"
+  parallel_phylogenetics_configure_beagle
+fi
 # shellcheck source=scripts/benchmark_resume.sh
 source "${repository}/scripts/benchmark_resume.sh"
 # shellcheck source=scripts/capacity_bounded.sh
