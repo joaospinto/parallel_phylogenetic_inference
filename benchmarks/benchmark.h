@@ -25,6 +25,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace parallel_phylogenetics::benchmark {
@@ -46,6 +47,7 @@ struct Options {
   std::size_t replicate_start = 0;
   std::size_t replicates = 1;
   bool compress_patterns = false;
+  std::string benchmark_mode = "full-input-update";
   std::optional<std::filesystem::path> newick;
   std::optional<std::filesystem::path> fasta;
   std::optional<std::filesystem::path> phylip;
@@ -135,6 +137,15 @@ inline Options ParseOptions(int argc, char **argv) {
       if (value != "true" && value != "false")
         throw std::invalid_argument("--compress-patterns must be true or false");
       options.compress_patterns = value == "true";
+    } else if (option == "--benchmark-mode") {
+      options.benchmark_mode = argv[index];
+      if (options.benchmark_mode != "fixed-model" &&
+          options.benchmark_mode != "factor-update" &&
+          options.benchmark_mode != "full-input-update") {
+        throw std::invalid_argument(
+            "--benchmark-mode must be fixed-model, factor-update, or "
+            "full-input-update");
+      }
     } else if (option == "--newick") {
       options.newick = argv[index];
     } else if (option == "--fasta") {
@@ -356,6 +367,7 @@ struct BenchmarkResult {
   double cpu_ms = 0.0;
   double prepare_ms = 0.0;
   double total_accelerator_ms = 0.0;
+  double initial_staging_ms = 0.0;
   double cpu_p25_ms = 0.0;
   double cpu_p75_ms = 0.0;
   double prepared_p25_ms = 0.0;
@@ -370,6 +382,16 @@ struct BenchmarkResult {
   std::vector<double> download_samples_ms;
   std::vector<double> total_samples_ms;
 };
+
+inline InputUpdate BenchmarkInputUpdate(std::string_view mode) {
+  if (mode == "full-input-update")
+    return InputUpdate::kAll;
+  if (mode == "factor-update")
+    return InputUpdate::kFactors;
+  if (mode == "fixed-model")
+    return InputUpdate::kNone;
+  throw std::invalid_argument("unknown benchmark input-update mode");
+}
 
 template <typename Cpu, typename Accelerator>
 void ConditionInterleaved(std::size_t milliseconds, Cpu &&cpu,
@@ -391,103 +413,6 @@ void ConditionInterleaved(std::size_t milliseconds, Cpu &&cpu,
   } while (Clock::now() < deadline);
 }
 
-// The callable must synchronously evaluate the factors and return a view whose
-// storage remains valid until the next call. Alternating which implementation
-// runs first reduces order and thermal bias on passively cooled devices.
-template <typename Destination, typename Accelerator>
-BenchmarkResult RunInterleaved(AlignmentModelView model, int repeats,
-                               std::size_t conditioning_ms,
-                               Destination destination,
-                               Accelerator &&accelerator) {
-  SequentialWorkspace cpu_workspace;
-  cpu_workspace.Reserve(model.plan, model.sites);
-
-  static_cast<void>(LogLikelihoodsPrepared(model, cpu_workspace));
-  const auto warm_factors = Prepare(model, destination);
-  static_cast<void>(accelerator(warm_factors));
-
-  std::vector<double> cpu_times;
-  std::vector<double> prepare_times;
-  std::vector<double> wall_times;
-  std::vector<double> upload_times;
-  std::vector<double> kernel_times;
-  std::vector<double> download_times;
-  std::vector<double> total_times;
-  cpu_times.reserve(repeats);
-  prepare_times.reserve(repeats);
-  wall_times.reserve(repeats);
-  upload_times.reserve(repeats);
-  kernel_times.reserve(repeats);
-  download_times.reserve(repeats);
-  total_times.reserve(repeats);
-
-  std::span<const Scalar> cpu_values;
-  tree_hmm::PartitionView accelerator_result;
-  const auto run_cpu = [&] {
-    const Clock::time_point begin = Clock::now();
-    cpu_values = LogLikelihoodsPrepared(model, cpu_workspace);
-    cpu_times.push_back(Milliseconds(begin, Clock::now()));
-  };
-  const auto run_accelerator = [&] {
-    const Clock::time_point total_begin = Clock::now();
-    const Clock::time_point prepare_begin = total_begin;
-    const auto factors = Prepare(model, destination);
-    const Clock::time_point prepare_end = Clock::now();
-    accelerator_result = accelerator(factors);
-    const Clock::time_point total_end = Clock::now();
-    prepare_times.push_back(Milliseconds(prepare_begin, prepare_end));
-    wall_times.push_back(accelerator_result.timings.wall_ms);
-    upload_times.push_back(accelerator_result.timings.upload_ms);
-    kernel_times.push_back(accelerator_result.timings.kernel_ms);
-    download_times.push_back(accelerator_result.timings.download_ms);
-    total_times.push_back(Milliseconds(total_begin, total_end));
-  };
-
-  ConditionInterleaved(conditioning_ms, run_cpu, run_accelerator);
-  cpu_times.clear();
-  prepare_times.clear();
-  wall_times.clear();
-  upload_times.clear();
-  kernel_times.clear();
-  download_times.clear();
-  total_times.clear();
-
-  for (int repeat = 0; repeat < repeats; ++repeat) {
-    if (repeat % 2 == 0) {
-      run_cpu();
-      run_accelerator();
-    } else {
-      run_accelerator();
-      run_cpu();
-    }
-  }
-
-  accelerator_result.timings.wall_ms = Median(wall_times);
-  accelerator_result.timings.upload_ms = Median(upload_times);
-  accelerator_result.timings.kernel_ms = Median(kernel_times);
-  accelerator_result.timings.download_ms = Median(download_times);
-  return {std::vector<Scalar>(cpu_values.begin(), cpu_values.end()),
-          std::vector<Scalar>(accelerator_result.values.begin(),
-                              accelerator_result.values.end()),
-          accelerator_result.timings,
-          Median(cpu_times),
-          Median(prepare_times),
-          Median(total_times),
-          Quantile(cpu_times, 0.25),
-          Quantile(cpu_times, 0.75),
-          Quantile(wall_times, 0.25),
-          Quantile(wall_times, 0.75),
-          Quantile(total_times, 0.25),
-          Quantile(total_times, 0.75),
-          cpu_times,
-          prepare_times,
-          wall_times,
-          upload_times,
-          kernel_times,
-          download_times,
-          total_times};
-}
-
 inline AlignmentModelView SiteBatch(AlignmentModelView model,
                                     std::size_t first_site,
                                     std::size_t site_count) {
@@ -502,73 +427,28 @@ inline AlignmentModelView SiteBatch(AlignmentModelView model,
       model.substitution_rate};
 }
 
-inline tree_hmm::MutableBatchedModelView
-BatchPrefix(tree_hmm::MutableBatchedModelView destination, std::size_t batch) {
-  if (batch == 0 || batch > destination.batch)
-    throw std::invalid_argument(
-        "requested batch exceeds the accelerator input capacity");
-  if (destination.node_potentials.size() % destination.batch != 0)
-    throw std::invalid_argument("accelerator input capacity has a wrong shape");
-  const std::size_t node_values =
-      batch * (destination.node_potentials.size() / destination.batch);
-  return {destination.plan, destination.states, batch,
-          destination.node_potentials.first(node_values),
-          destination.edge_potentials};
+inline std::size_t CpuReferenceSiteBatch(AlignmentModelView model) {
+  // Keep the conventional correctness baseline independently bounded even
+  // when an accelerator can accommodate a much larger site batch.
+  constexpr std::size_t kTargetNodeSites = std::size_t{1} << 20;
+  return std::min(model.sites,
+                  std::max(std::size_t{1},
+                           kTargetNodeSites / model.plan.num_nodes()));
 }
 
-inline tree_hmm::MutableBatchedCategoricalModelView
-BatchPrefix(tree_hmm::MutableBatchedCategoricalModelView destination,
-            std::size_t batch) {
-  if (batch == 0 || batch > destination.batch)
-    throw std::invalid_argument(
-        "requested batch exceeds the accelerator input capacity");
-  if (destination.observations.size() % destination.batch != 0) {
-    throw std::invalid_argument(
-        "categorical accelerator input capacity has a wrong shape");
-  }
-  const std::size_t observation_values =
-      batch * (destination.observations.size() / destination.batch);
-  return {destination.plan,
-          destination.states,
-          batch,
-          destination.categories,
-          destination.observation_nodes,
-          destination.observations.first(observation_values),
-          destination.root_potential,
-          destination.emission_potentials,
-          destination.edge_potentials};
-}
-
-// Evaluates a complete alignment in fixed-size batches. The caller reserves
-// one accelerator workspace at the full batch capacity; its prefix is reused
-// for the tail, so neither execution path allocates while timing. Result
-// concatenation is deliberately outside the measured intervals because both
-// backends have already materialized those values.
-template <typename Destination, typename Accelerator>
-BenchmarkResult
-RunChunkedInterleaved(AlignmentModelView model, int repeats,
-                      std::size_t conditioning_ms, std::size_t site_batch,
-                      Destination full_destination, Accelerator &&accelerator) {
-  if (site_batch == 0 || site_batch >= model.sites)
-    throw std::invalid_argument(
-        "chunked inference requires a batch smaller than the alignment");
-  const std::size_t remainder = model.sites % site_batch;
+template <typename AcceleratorWorkspace, typename Reserve, typename Evaluate>
+BenchmarkResult RunCompleteAlignmentInterleaved(
+    AlignmentModelView model, int repeats, std::size_t conditioning_ms,
+    std::size_t site_batch, AcceleratorWorkspace &accelerator_workspace,
+    Reserve &&reserve, Evaluate &&evaluate) {
+  const std::size_t cpu_site_batch = CpuReferenceSiteBatch(model);
+  const std::size_t remainder = model.sites % cpu_site_batch;
   SequentialWorkspace full_cpu;
-  full_cpu.Reserve(model.plan, site_batch);
+  full_cpu.Reserve(model.plan, cpu_site_batch);
   SequentialWorkspace tail_cpu;
   if (remainder != 0)
     tail_cpu.Reserve(model.plan, remainder);
-
-  const AlignmentModelView first = SiteBatch(model, 0, site_batch);
-  static_cast<void>(LogLikelihoodsPrepared(first, full_cpu));
-  static_cast<void>(accelerator(Prepare(first, full_destination)));
-  if (remainder != 0) {
-    const AlignmentModelView tail =
-        SiteBatch(model, model.sites - remainder, remainder);
-    static_cast<void>(LogLikelihoodsPrepared(tail, tail_cpu));
-    static_cast<void>(
-        accelerator(Prepare(tail, BatchPrefix(full_destination, remainder))));
-  }
+  reserve(accelerator_workspace, model, site_batch);
 
   std::vector<Scalar> cpu_values(model.sites);
   std::vector<Scalar> accelerator_values(model.sites);
@@ -579,66 +459,38 @@ RunChunkedInterleaved(AlignmentModelView model, int repeats,
   std::vector<double> kernel_times;
   std::vector<double> download_times;
   std::vector<double> total_times;
-  cpu_times.reserve(repeats);
-  prepare_times.reserve(repeats);
-  wall_times.reserve(repeats);
-  upload_times.reserve(repeats);
-  kernel_times.reserve(repeats);
-  download_times.reserve(repeats);
-  total_times.reserve(repeats);
-
   const auto run_cpu = [&] {
-    double elapsed = 0.0;
+    const Clock::time_point begin = Clock::now();
     for (std::size_t first_site = 0; first_site < model.sites;
-         first_site += site_batch) {
-      const std::size_t count = std::min(site_batch, model.sites - first_site);
+         first_site += cpu_site_batch) {
+      const std::size_t count =
+          std::min(cpu_site_batch, model.sites - first_site);
       const AlignmentModelView chunk = SiteBatch(model, first_site, count);
       SequentialWorkspace &workspace =
-          count == site_batch ? full_cpu : tail_cpu;
-      const Clock::time_point begin = Clock::now();
-      const std::span<const Scalar> values =
-          LogLikelihoodsPrepared(chunk, workspace);
-      elapsed += Milliseconds(begin, Clock::now());
+          count == cpu_site_batch ? full_cpu : tail_cpu;
+      const auto values = LogLikelihoodsPrepared(chunk, workspace);
       std::copy(values.begin(), values.end(), cpu_values.begin() + first_site);
     }
-    cpu_times.push_back(elapsed);
+    cpu_times.push_back(Milliseconds(begin, Clock::now()));
   };
-
   const auto run_accelerator = [&] {
-    double prepare_elapsed = 0.0;
-    double wall_elapsed = 0.0;
-    double upload_elapsed = 0.0;
-    double kernel_elapsed = 0.0;
-    double download_elapsed = 0.0;
-    const Clock::time_point total_begin = Clock::now();
-    const Clock::time_point shared_begin = Clock::now();
-    internal::PrepareCategoricalShared(model, full_destination);
-    prepare_elapsed += Milliseconds(shared_begin, Clock::now());
-    for (std::size_t first_site = 0; first_site < model.sites;
-         first_site += site_batch) {
-      const std::size_t count = std::min(site_batch, model.sites - first_site);
-      const AlignmentModelView chunk = SiteBatch(model, first_site, count);
-      const auto destination = BatchPrefix(full_destination, count);
-      const Clock::time_point prepare_begin = Clock::now();
-      const auto factors =
-          internal::PrepareCategoricalObservations(chunk, destination);
-      prepare_elapsed += Milliseconds(prepare_begin, Clock::now());
-      const tree_hmm::PartitionView result = accelerator(factors);
-      wall_elapsed += result.timings.wall_ms;
-      upload_elapsed += result.timings.upload_ms;
-      kernel_elapsed += result.timings.kernel_ms;
-      download_elapsed += result.timings.download_ms;
-      std::copy(result.values.begin(), result.values.end(),
-                accelerator_values.begin() + first_site);
-    }
-    prepare_times.push_back(prepare_elapsed);
-    wall_times.push_back(wall_elapsed);
-    upload_times.push_back(upload_elapsed);
-    kernel_times.push_back(kernel_elapsed);
-    download_times.push_back(download_elapsed);
-    total_times.push_back(Milliseconds(total_begin, Clock::now()));
+    const Clock::time_point outer_begin = Clock::now();
+    const auto values =
+        evaluate(model, accelerator_workspace, InputUpdate::kAll);
+    const double outer_wall_ms = Milliseconds(outer_begin, Clock::now());
+    const PreparedTimings timing = accelerator_workspace.LastTimings();
+    prepare_times.push_back(
+        std::max(0.0, outer_wall_ms - timing.backend.wall_ms));
+    wall_times.push_back(timing.backend.wall_ms);
+    upload_times.push_back(timing.backend.upload_ms);
+    kernel_times.push_back(timing.backend.kernel_ms);
+    download_times.push_back(timing.backend.download_ms);
+    total_times.push_back(outer_wall_ms);
+    std::copy(values.begin(), values.end(), accelerator_values.begin());
   };
 
+  run_cpu();
+  run_accelerator();
   ConditionInterleaved(conditioning_ms, run_cpu, run_accelerator);
   cpu_times.clear();
   prepare_times.clear();
@@ -647,7 +499,6 @@ RunChunkedInterleaved(AlignmentModelView model, int repeats,
   kernel_times.clear();
   download_times.clear();
   total_times.clear();
-
   for (int repeat = 0; repeat < repeats; ++repeat) {
     if (repeat % 2 == 0) {
       run_cpu();
@@ -664,6 +515,7 @@ RunChunkedInterleaved(AlignmentModelView model, int repeats,
           Median(cpu_times),
           Median(prepare_times),
           Median(total_times),
+          0.0,
           Quantile(cpu_times, 0.25),
           Quantile(cpu_times, 0.75),
           Quantile(wall_times, 0.25),
@@ -679,14 +531,175 @@ RunChunkedInterleaved(AlignmentModelView model, int repeats,
           total_times};
 }
 
+// Times resident-input modes as a sum of per-chunk prepared calls. Capacity-bounded
+// alignments are processed one exact site chunk at a time. Each chunk is first
+// staged by one untimed kAll call, after which its timed kFactors or kNone
+// repetitions reuse precisely those resident observations. The workspace is
+// then reused for the next chunk, so the benchmark neither allocates one
+// device workspace per chunk nor implies that the full alignment is resident.
+template <typename AcceleratorWorkspace, typename Reserve, typename Evaluate>
+BenchmarkResult RunResidentChunkProjection(
+    AlignmentModelView model, int repeats, std::size_t conditioning_ms,
+    std::size_t site_batch, InputUpdate update,
+    AcceleratorWorkspace &full_accelerator,
+    AcceleratorWorkspace &tail_accelerator, Reserve &&reserve,
+    Evaluate &&evaluate) {
+  if (site_batch == 0 || site_batch > model.sites)
+    throw std::invalid_argument("invalid accelerator site batch");
+  const std::size_t cpu_site_batch = CpuReferenceSiteBatch(model);
+  const std::size_t remainder = model.sites % site_batch;
+  const std::size_t cpu_remainder = model.sites % cpu_site_batch;
+  SequentialWorkspace full_cpu;
+  full_cpu.Reserve(model.plan, cpu_site_batch);
+  SequentialWorkspace tail_cpu;
+  if (cpu_remainder != 0)
+    tail_cpu.Reserve(model.plan, cpu_remainder);
+
+  const AlignmentModelView first = SiteBatch(model, 0, site_batch);
+  reserve(full_accelerator, first, first.sites);
+  if (remainder != 0) {
+    const AlignmentModelView tail =
+        SiteBatch(model, model.sites - remainder, remainder);
+    reserve(tail_accelerator, tail, tail.sites);
+  }
+
+  std::vector<Scalar> cpu_values(model.sites);
+  std::vector<Scalar> accelerator_values(model.sites);
+  std::vector<double> cpu_times;
+  std::vector<double> prepare_times;
+  std::vector<double> wall_times;
+  std::vector<double> upload_times;
+  std::vector<double> kernel_times;
+  std::vector<double> download_times;
+  std::vector<double> total_times;
+  cpu_times.reserve(repeats);
+  prepare_times.assign(repeats, 0.0);
+  wall_times.assign(repeats, 0.0);
+  upload_times.assign(repeats, 0.0);
+  kernel_times.assign(repeats, 0.0);
+  download_times.assign(repeats, 0.0);
+  total_times.assign(repeats, 0.0);
+
+  // A full-input conditioning sweep warms the same kernels without relying on
+  // resident state that will be replaced by the subsequent chunk.
+  const auto run_cpu = [&] {
+    const Clock::time_point begin = Clock::now();
+    for (std::size_t first_site = 0; first_site < model.sites;
+         first_site += cpu_site_batch) {
+      const std::size_t count =
+          std::min(cpu_site_batch, model.sites - first_site);
+      const AlignmentModelView chunk = SiteBatch(model, first_site, count);
+      SequentialWorkspace &workspace =
+          count == cpu_site_batch ? full_cpu : tail_cpu;
+      const auto values = LogLikelihoodsPrepared(chunk, workspace);
+      std::copy(values.begin(), values.end(), cpu_values.begin() + first_site);
+    }
+    cpu_times.push_back(Milliseconds(begin, Clock::now()));
+  };
+  std::size_t conditioning_chunk = 0;
+  const auto condition_accelerator = [&] {
+    const std::size_t first_site = conditioning_chunk % model.sites;
+    const std::size_t count = std::min(site_batch, model.sites - first_site);
+    const AlignmentModelView chunk = SiteBatch(model, first_site, count);
+    AcceleratorWorkspace &workspace =
+        count == site_batch ? full_accelerator : tail_accelerator;
+    static_cast<void>(evaluate(chunk, workspace, InputUpdate::kAll));
+    conditioning_chunk = (first_site + count) % model.sites;
+  };
+  ConditionInterleaved(conditioning_ms, run_cpu,
+                       condition_accelerator);
+  run_cpu();
+  cpu_times.clear();
+  for (int repeat = 0; repeat < repeats; ++repeat)
+    run_cpu();
+
+  double initial_staging_ms = 0.0;
+  for (std::size_t first_site = 0; first_site < model.sites;
+       first_site += site_batch) {
+    const std::size_t count = std::min(site_batch, model.sites - first_site);
+    const AlignmentModelView chunk = SiteBatch(model, first_site, count);
+    AcceleratorWorkspace &accelerator_workspace =
+        count == site_batch ? full_accelerator : tail_accelerator;
+
+    const Clock::time_point staging_begin = Clock::now();
+    static_cast<void>(
+        evaluate(chunk, accelerator_workspace, InputUpdate::kAll));
+    initial_staging_ms += Milliseconds(staging_begin, Clock::now());
+
+    for (int repeat = 0; repeat < repeats; ++repeat) {
+      const auto run_accelerator = [&] {
+        const Clock::time_point outer_begin = Clock::now();
+        const std::span<const Scalar> values =
+            evaluate(chunk, accelerator_workspace, update);
+        const double outer_wall_ms = Milliseconds(outer_begin, Clock::now());
+        const PreparedTimings timing = accelerator_workspace.LastTimings();
+        prepare_times[repeat] +=
+            std::max(0.0, outer_wall_ms - timing.backend.wall_ms);
+        wall_times[repeat] += timing.backend.wall_ms;
+        upload_times[repeat] += timing.backend.upload_ms;
+        kernel_times[repeat] += timing.backend.kernel_ms;
+        download_times[repeat] += timing.backend.download_ms;
+        total_times[repeat] += outer_wall_ms;
+        std::copy(values.begin(), values.end(),
+                  accelerator_values.begin() + first_site);
+      };
+      run_accelerator();
+    }
+  }
+  return {std::move(cpu_values),
+          std::move(accelerator_values),
+          {Median(upload_times), Median(kernel_times), Median(download_times),
+           Median(wall_times)},
+          Median(cpu_times),
+          Median(prepare_times),
+          Median(total_times),
+          initial_staging_ms,
+          Quantile(cpu_times, 0.25),
+          Quantile(cpu_times, 0.75),
+          Quantile(wall_times, 0.25),
+          Quantile(wall_times, 0.75),
+          Quantile(total_times, 0.25),
+          Quantile(total_times, 0.75),
+          cpu_times,
+          prepare_times,
+          wall_times,
+          upload_times,
+          kernel_times,
+          download_times,
+          total_times};
+}
+
+template <typename AcceleratorWorkspace, typename Reserve, typename Evaluate>
+BenchmarkResult RunInterleaved(
+    AlignmentModelView model, int repeats, std::size_t conditioning_ms,
+    std::size_t site_batch, InputUpdate update,
+    AcceleratorWorkspace &full_accelerator,
+    AcceleratorWorkspace &tail_accelerator, Reserve &&reserve,
+    Evaluate &&evaluate) {
+  if (site_batch == 0 || site_batch > model.sites)
+    throw std::invalid_argument("invalid accelerator site batch");
+  if (update == InputUpdate::kAll) {
+    return RunCompleteAlignmentInterleaved(
+        model, repeats, conditioning_ms, site_batch, full_accelerator,
+        std::forward<Reserve>(reserve), std::forward<Evaluate>(evaluate));
+  }
+  return RunResidentChunkProjection(
+      model, repeats, conditioning_ms, site_batch, update, full_accelerator,
+      tail_accelerator, std::forward<Reserve>(reserve),
+      std::forward<Evaluate>(evaluate));
+}
+
 inline double MaxAbsoluteError(std::span<const Scalar> expected,
                                std::span<const Scalar> actual) {
   if (expected.size() != actual.size())
     throw std::invalid_argument("benchmark output shapes do not match");
   double result = 0.0;
   for (std::size_t index = 0; index < expected.size(); ++index) {
-    result = std::max(
-        result, std::abs(expected[index] - static_cast<double>(actual[index])));
+    const double reference = static_cast<double>(expected[index]);
+    const double value = static_cast<double>(actual[index]);
+    if (!std::isfinite(reference) || !std::isfinite(value))
+      return std::numeric_limits<double>::infinity();
+    result = std::max(result, std::abs(reference - value));
   }
   return result;
 }
@@ -697,11 +710,14 @@ inline double MaxRelativeError(std::span<const Scalar> expected,
     throw std::invalid_argument("benchmark output shapes do not match");
   double result = 0.0;
   for (std::size_t index = 0; index < expected.size(); ++index) {
-    const double error =
-        std::abs(expected[index] - static_cast<double>(actual[index]));
+    const double reference = static_cast<double>(expected[index]);
+    const double value = static_cast<double>(actual[index]);
+    if (!std::isfinite(reference) || !std::isfinite(value))
+      return std::numeric_limits<double>::infinity();
+    const double error = std::abs(reference - value);
     result = std::max(
         result,
-        error / std::max(1.0, std::abs(static_cast<double>(expected[index]))));
+        error / std::max(1.0, std::abs(reference)));
   }
   return result;
 }
@@ -715,29 +731,54 @@ inline void PrintHeader(const char *backend, const std::string &device,
       << "# device=" << device << '\n'
       << "# dataset=" << problem.dataset << '\n'
       << "# topology=" << problem.topology << "-bifurcating-jc69\n"
-      << "# timing_prepared=host wall time of one preallocated backend call; "
-         "topology planning, workspace allocation, host factor construction, "
-         "and warmup excluded\n"
-      << "# timing_resident=not measured: every public prepared call uploads "
-         "its inputs\n"
+      << "# benchmark_mode=" << options.benchmark_mode << '\n'
+      << "# timing_prepared=host wall time inside the preallocated tree-HMM "
+         "backend; it includes only the input transfers selected by "
+         "benchmark_mode, computation, and result transfer\n"
       << "# timing_device_compute_download=kernel+result-download device events; "
          "input upload excluded\n"
-      << "# timing_end_to_end=host factor construction+prepared call\n"
+      << "# timing_measured_total=complete-alignment public-call wall time "
+         "for full-input-update; sum of exact per-chunk resident-call wall "
+         "times for factor-update and fixed-model\n"
+      << "# timing_initial_staging=one untimed full-input kAll evaluation per "
+         "exact site chunk for resident modes; reported separately and "
+         "excluded from timed calls\n"
+      << "# warmup=all modes execute one untimed evaluation before "
+         "measurement; this is not included in initial_staging_ms\n"
+      << "# measurement_scope="
+      << (options.benchmark_mode == "full-input-update" ||
+                  (options.site_batch == 0 || options.site_batch >= problem.sites)
+              ? "complete-alignment-wall-time"
+              : "sum-of-per-chunk-resident-calls")
+      << '\n'
+      << "# resident_chunking=factor-update and fixed-model stage and measure "
+         "each exact chunk before reusing the workspace; their reported "
+         "totals are projections, not complete-alignment wall times, unless "
+         "site_batch equals the number of unique patterns\n"
+      << "# factor_projection=for multiple chunks, factor-update sums one "
+         "factor refresh per resident chunk; it does not estimate a storage "
+         "scheme that shares one refreshed factor copy across all chunks\n"
       << "# conditioning_ms=" << options.conditioning_ms << '\n'
-      << "# CPU and accelerator execution order alternates by repeat\n"
-      << "backend,precision,dataset,topology,seed_base,seed,replicate,leaves,nodes,"
-         "sites,unique_patterns,site_batch,binary_tree,tree_height,sackin_index,"
+      << "# conventional_cpu_reference=full evaluation with an independently "
+         "memory-bounded workspace; it is a correctness/reference timing, not a "
+         "mode-matched resident implementation\n"
+      << "# execution_order=CPU and accelerator alternate for full-input; "
+         "resident projections time the conventional CPU reference "
+         "separately\n"
+      << "backend,precision,benchmark_mode,dataset,topology,seed_base,seed,replicate,leaves,nodes,"
+         "sites,unique_patterns,site_batch,cpu_reference_site_batch,binary_tree,tree_height,sackin_index,"
          "colless_index,normalized_colless,structural_rounds,"
-         "primitive_levels,primitive_operations,planning_ms,staged_input_bytes,"
+         "primitive_levels,primitive_operations,planning_ms,"
          "repeats,conditioning_ms,cpu_ms,cpu_p25_ms,cpu_p75_ms,prepare_ms,"
-         "prepared_ms,prepared_p25_ms,prepared_p75_ms,resident_ms,"
+         "prepared_ms,prepared_p25_ms,prepared_p75_ms,initial_staging_ms,"
          "device_compute_download_ms,upload_ms,kernel_ms,download_ms,"
-         "end_to_end_ms,end_to_end_p25_ms,"
-         "end_to_end_p75_ms,end_to_end_speedup,prepared_speedup,"
+         "measured_total_ms,measured_total_p25_ms,"
+         "measured_total_p75_ms,conventional_full_cpu_over_measured_total,"
+         "conventional_full_cpu_over_prepared,"
          "cpu_log_likelihood,accelerator_log_likelihood,max_abs_error,"
          "max_relative_error,cpu_samples_ms,prepare_samples_ms,"
          "prepared_samples_ms,upload_samples_ms,kernel_samples_ms,"
-         "download_samples_ms,end_to_end_samples_ms\n";
+         "download_samples_ms,measured_total_samples_ms\n";
   static_cast<void>(statistics);
 }
 
@@ -752,11 +793,6 @@ inline void PrintRow(const char *backend, const Options &options,
   const std::size_t site_batch =
       options.site_batch == 0 ? problem.sites
                               : std::min(options.site_batch, problem.sites);
-  const std::size_t input_bytes =
-      site_batch * problem.observation_nodes.size() * sizeof(Nucleotide) +
-      problem.plan.num_edges() * 16 * sizeof(Scalar) +
-      problem.observation_nodes.size() * sizeof(btrc::Index) +
-      (4 + 16 * 4) * sizeof(Scalar);
   const std::size_t primitive_operations =
       statistics.rakes + problem.plan.num_branch_combinations() +
       problem.plan.num_branch_absorptions() + statistics.compressions;
@@ -771,24 +807,32 @@ inline void PrintRow(const char *backend, const Options &options,
     return result;
   };
   std::cout << std::setprecision(10) << backend << ','
-            << tree_hmm::kPrecisionName << ',' << problem.dataset << ','
+            << tree_hmm::kPrecisionName << ',' << options.benchmark_mode << ','
+            << problem.dataset << ','
             << problem.topology << ',' << problem.base_seed << ','
             << problem.seed << ','
             << problem.replicate << ',' << problem.leaves << ','
             << problem.plan.num_nodes() << ',' << problem.raw_sites << ','
             << problem.sites << ',' << site_batch << ','
+            << CpuReferenceSiteBatch(
+                   AlignmentModelView{problem.plan, problem.sites,
+                                      problem.branch_lengths,
+                                      problem.observation_nodes,
+                                      problem.observations})
+            << ','
             << (problem.shape.binary ? 1 : 0) << ',' << problem.shape.height
             << ',' << problem.shape.sackin << ','
             << problem.shape.colless << ','
             << problem.shape.normalized_colless << ',' << statistics.rounds
             << ',' << statistics.primitive_levels << ','
             << primitive_operations << ',' << problem.planning_ms << ','
-            << input_bytes << ',' << options.repeats << ','
+            << options.repeats << ','
             << options.conditioning_ms << ',' << cpu_ms << ','
             << result.cpu_p25_ms << ',' << result.cpu_p75_ms << ','
             << prepare_ms << ',' << accelerator.wall_ms << ','
             << result.prepared_p25_ms << ',' << result.prepared_p75_ms << ','
-            << ',' << accelerator.kernel_ms + accelerator.download_ms << ','
+            << result.initial_staging_ms << ','
+            << accelerator.kernel_ms + accelerator.download_ms << ','
             << accelerator.upload_ms << ',' << accelerator.kernel_ms << ','
             << accelerator.download_ms << ',' << total_accelerator_ms << ','
             << result.total_p25_ms << ',' << result.total_p75_ms << ','

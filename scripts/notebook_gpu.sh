@@ -73,11 +73,50 @@ case "${accelerator_backend}" in
 esac
 accelerator_test="${accelerator_backend}_test"
 accelerator_benchmark="${accelerator_backend}_benchmark"
+benchmark_profile="${TREE_HMM_BENCHMARK_PROFILE:-curated}"
+case "${benchmark_profile}" in
+  curated)
+    default_sections="validation synthetic fish pandit"
+    default_modes="full-input-update"
+    default_synthetic_modes="full-input-update factor-update fixed-model"
+    default_task_modes="full-input-update"
+    default_pandit_limit=25
+    ;;
+  complete)
+    default_sections="validation synthetic distributions tasks fish pandit"
+    default_modes="full-input-update factor-update fixed-model"
+    default_synthetic_modes="${default_modes}"
+    default_task_modes="${default_modes}"
+    default_pandit_limit=0
+    ;;
+  *)
+    echo "TREE_HMM_BENCHMARK_PROFILE must be curated or complete" >&2
+    exit 2
+    ;;
+esac
 repeats="${TREE_HMM_BENCHMARK_REPEATS:-5}"
 empirical_repeats="${TREE_HMM_EMPIRICAL_REPEATS:-3}"
 read -r -a precisions <<< "${TREE_HMM_PRECISIONS:-FP64 FP32}"
+read -r -a benchmark_modes <<< \
+  "${TREE_HMM_BENCHMARK_MODES:-${default_modes}}"
+read -r -a synthetic_benchmark_modes <<< \
+  "${TREE_HMM_SYNTHETIC_BENCHMARK_MODES:-${default_synthetic_modes}}"
+read -r -a fish_benchmark_modes <<< \
+  "${TREE_HMM_FISH_BENCHMARK_MODES:-${default_modes}}"
+read -r -a pandit_benchmark_modes <<< \
+  "${TREE_HMM_PANDIT_BENCHMARK_MODES:-${default_modes}}"
+read -r -a task_benchmark_modes <<< \
+  "${TREE_HMM_TASK_BENCHMARK_MODES:-${default_task_modes}}"
+pandit_limit="${PANDIT_LIMIT:-${default_pandit_limit}}"
+logical_core_count="$(nproc)"
+read -r -a beagle_cpu_thread_counts <<< \
+  "${TREE_HMM_BEAGLE_CPU_THREADS:-1 ${logical_core_count}}"
+if [[ "${#beagle_cpu_thread_counts[@]}" -eq 2 &&
+      "${beagle_cpu_thread_counts[0]}" == "${beagle_cpu_thread_counts[1]}" ]]; then
+  beagle_cpu_thread_counts=("${beagle_cpu_thread_counts[0]}")
+fi
 read -r -a benchmark_sections <<< \
-  "${TREE_HMM_BENCHMARK_SECTIONS:-validation synthetic fish pandit}"
+  "${TREE_HMM_BENCHMARK_SECTIONS:-${default_sections}}"
 resume_report="${TREE_HMM_RESUME_REPORT:-}"
 host_memory_guard_percent="${TREE_HMM_HOST_MEMORY_GUARD_PERCENT:-75}"
 fish_minimum_site_batch="${TREE_HMM_FISH_MINIMUM_SITE_BATCH:-256}"
@@ -96,6 +135,23 @@ fi
 for precision in "${precisions[@]}"; do
   if [[ "${precision}" != "FP64" && "${precision}" != "FP32" ]]; then
     echo "TREE_HMM_PRECISIONS contains unsupported precision ${precision}" >&2
+    exit 2
+  fi
+done
+for mode in "${benchmark_modes[@]}" "${synthetic_benchmark_modes[@]}" \
+  "${fish_benchmark_modes[@]}" "${pandit_benchmark_modes[@]}" \
+  "${task_benchmark_modes[@]}"; do
+  case "${mode}" in
+    full-input-update|factor-update|fixed-model) ;;
+    *)
+      echo "TREE_HMM_BENCHMARK_MODES contains unsupported mode ${mode}" >&2
+      exit 2
+      ;;
+  esac
+done
+for threads in "${beagle_cpu_thread_counts[@]}"; do
+  if [[ ! "${threads}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "TREE_HMM_BEAGLE_CPU_THREADS must contain positive integers" >&2
     exit 2
   fi
 done
@@ -235,7 +291,19 @@ else
   "${TREE_HMM_RESOLVED_AMDCLANGXX}" --version
 fi
 echo "selected Bazel ${accelerator_title} target: ${accelerator_target}"
+if [[ -f "${BEAGLE_PREFIX:-/usr/local}/BEAGLE_BUILD_METADATA.txt" ]]; then
+  echo "=== BEAGLE source identity ==="
+  cat "${BEAGLE_PREFIX:-/usr/local}/BEAGLE_BUILD_METADATA.txt"
+fi
 echo "selected notebook sections: ${benchmark_sections[*]}"
+echo "selected benchmark modes: ${benchmark_modes[*]}"
+echo "synthetic benchmark modes: ${synthetic_benchmark_modes[*]}"
+echo "benchmark profile: ${benchmark_profile}"
+echo "PANDIT family limit: ${pandit_limit}"
+echo "fish benchmark modes: ${fish_benchmark_modes[*]}"
+echo "PANDIT benchmark modes: ${pandit_benchmark_modes[*]}"
+echo "host logical cores: ${logical_core_count}"
+echo "BEAGLE CPU thread counts: ${beagle_cpu_thread_counts[*]}"
 echo "host-memory guard for CPU capacity probes:" \
   "${initial_host_memory_guard_kib} KiB" \
   "(${host_memory_guard_percent}% of currently available memory)"
@@ -278,7 +346,7 @@ if [[ "${TREE_HMM_SKIP_BENCHMARKS:-0}" != "1" &&
   if [[ "${accelerator_backend}" == cuda ]]; then
     beagle_build_backend=cuda
   fi
-  beagle_prefix="${notebook_work_dir}/beagle-4.0.1-${beagle_build_backend}"
+  beagle_prefix="${notebook_work_dir}/beagle-4.1.0-pre-release-${beagle_build_backend}"
   BEAGLE_BUILD_BACKEND="${beagle_build_backend}" \
     bash "${repo_dir}/scripts/install_beagle.sh" "${beagle_prefix}"
   echo "=== BEAGLE source and build identity ==="
@@ -357,58 +425,76 @@ for precision in "${precisions[@]}"; do
       "16384 256"
       "65536 64"
     )
-    for topology in balanced caterpillar; do
-      for specification in "${cases[@]}"; do
+    for benchmark_mode in "${synthetic_benchmark_modes[@]}"; do
+      for topology in balanced caterpillar; do
+        for specification in "${cases[@]}"; do
         read -r leaves sites <<< "${specification}"
         if benchmark_resume_case_completed "${resume_report}" \
           "${accelerator_backend}" \
           "${precision}" synthetic "${topology}" "${leaves}" "${sites}" \
-          "${sites}"; then
+          "${sites}" "${benchmark_mode}"; then
           echo "# resume_skip method=${accelerator_backend}" \
             "precision=${precision}" \
             "dataset=synthetic topology=${topology} leaves=${leaves}" \
-            "sites=${sites} site_batch=${sites}"
+            "sites=${sites} site_batch=${sites}" \
+            "benchmark_mode=${benchmark_mode}"
           continue
         fi
         echo "# benchmark_start method=${accelerator_backend}" \
           "precision=${precision}" \
           "dataset=synthetic topology=${topology} leaves=${leaves}" \
-          "sites=${sites} site_batch=${sites}"
+          "sites=${sites} site_batch=${sites}" \
+          "benchmark_mode=${benchmark_mode}"
         "bazel-bin/${accelerator_benchmark}" \
           --topology "${topology}" \
           --leaves "${leaves}" \
           --sites "${sites}" \
-          --repeats "${repeats}"
+          --repeats "${repeats}" \
+          --benchmark-mode "${benchmark_mode}"
+        done
       done
     done
 
     if [[ "${TREE_HMM_SKIP_BEAGLE:-0}" != "1" ]]; then
       echo "=== ${precision} BEAGLE comparison ==="
       "${bazel_command}" build "${precision_args[@]}" //:beagle_benchmark
-      for resource in "${beagle_resources[@]}"; do
-        for topology in balanced caterpillar; do
-          for specification in "${cases[@]}"; do
+      for benchmark_mode in "${synthetic_benchmark_modes[@]}"; do
+        for resource in "${beagle_resources[@]}"; do
+          if [[ "${resource}" == cpu ]]; then
+            resource_threads=("${beagle_cpu_thread_counts[@]}")
+          else
+            resource_threads=(1)
+          fi
+          for threads in "${resource_threads[@]}"; do
+            for topology in balanced caterpillar; do
+              for specification in "${cases[@]}"; do
             read -r leaves sites <<< "${specification}"
             if benchmark_resume_case_completed "${resume_report}" \
               "beagle-${resource}" "${precision}" synthetic \
-              "${topology}" "${leaves}" "${sites}" "${sites}"; then
+              "${topology}" "${leaves}" "${sites}" "${sites}" \
+              "${benchmark_mode}" "${threads}"; then
               echo "# resume_skip method=beagle-${resource}" \
                 "precision=${precision} dataset=synthetic" \
                 "topology=${topology} leaves=${leaves} sites=${sites}" \
-                "site_batch=${sites}"
+                "site_batch=${sites} benchmark_mode=${benchmark_mode}" \
+                "threads=${threads}"
               continue
             fi
             echo "# benchmark_start method=beagle-${resource}" \
               "precision=${precision} dataset=synthetic" \
               "topology=${topology} leaves=${leaves} sites=${sites}" \
-              "site_batch=${sites}"
+              "site_batch=${sites} benchmark_mode=${benchmark_mode}" \
+              "threads=${threads}"
             bazel-bin/beagle_benchmark \
               --beagle-resource "${resource}" \
-              --beagle-threads 1 \
+              --beagle-threads "${threads}" \
               --topology "${topology}" \
               --leaves "${leaves}" \
               --sites "${sites}" \
-              --repeats "${repeats}"
+              --repeats "${repeats}" \
+              --benchmark-mode "${benchmark_mode}"
+              done
+            done
           done
         done
       done
@@ -418,18 +504,30 @@ for precision in "${precisions[@]}"; do
 
   if benchmark_section_enabled distributions; then
     echo "=== ${precision} prespecified topology-distribution study ==="
-    PRECISION="${precision_config}" \
-      TREE_HMM_RESUME_REPORT="${resume_report}" \
-      bash "${repo_dir}/scripts/benchmark_synthetic_distributions.sh" \
-        "${accelerator_backend}"
-    if [[ "${TREE_HMM_SKIP_BEAGLE:-0}" != "1" ]]; then
-      for resource in "${beagle_resources[@]}"; do
-        PRECISION="${precision_config}" \
-          TREE_HMM_RESUME_REPORT="${resume_report}" \
-          bash "${repo_dir}/scripts/benchmark_synthetic_distributions.sh" \
-            "beagle-${resource}"
-      done
-    fi
+    for benchmark_mode in "${benchmark_modes[@]}"; do
+      PRECISION="${precision_config}" \
+        TREE_HMM_BENCHMARK_MODE="${benchmark_mode}" \
+        TREE_HMM_RESUME_REPORT="${resume_report}" \
+        bash "${repo_dir}/scripts/benchmark_synthetic_distributions.sh" \
+          "${accelerator_backend}"
+      if [[ "${TREE_HMM_SKIP_BEAGLE:-0}" != "1" ]]; then
+        for resource in "${beagle_resources[@]}"; do
+          if [[ "${resource}" == cpu ]]; then
+            resource_threads=("${beagle_cpu_thread_counts[@]}")
+          else
+            resource_threads=(1)
+          fi
+          for threads in "${resource_threads[@]}"; do
+            PRECISION="${precision_config}" \
+              TREE_HMM_BENCHMARK_MODE="${benchmark_mode}" \
+              BEAGLE_THREADS="${threads}" \
+              TREE_HMM_RESUME_REPORT="${resume_report}" \
+              bash "${repo_dir}/scripts/benchmark_synthetic_distributions.sh" \
+                "beagle-${resource}"
+          done
+        done
+      fi
+    done
   fi
 
   if benchmark_section_enabled tasks; then
@@ -437,19 +535,27 @@ for precision in "${precisions[@]}"; do
     tasks_benchmark="${accelerator_backend}_tasks_benchmark"
     "${bazel_command}" build "${precision_args[@]}" \
       "${accelerator_args[@]}" "//:${tasks_benchmark}"
-    "bazel-bin/${tasks_benchmark}" --topology yule --leaves 2048 \
-      --sites 256 --seed 20260813 --replicates 10 --repeats "${repeats}"
+    for benchmark_mode in "${task_benchmark_modes[@]}"; do
+      "bazel-bin/${tasks_benchmark}" --topology yule --leaves 2048 \
+        --sites 256 --seed 20260813 --replicates 10 --repeats "${repeats}" \
+        --benchmark-mode "${benchmark_mode}"
+    done
   fi
 
   if benchmark_section_enabled fish &&
      [[ "${TREE_HMM_SKIP_FISH_TREE:-0}" != "1" ]]; then
     echo "=== ${precision} Fish Tree of Life public-data benchmark ==="
+    for benchmark_mode in "${fish_benchmark_modes[@]}"; do
     benchmark_capacity_exhausted=0
+    benchmark_capacity_dataset=actinopt_12k_raxml
+    benchmark_capacity_mode="${benchmark_mode}"
+    benchmark_capacity_threads=none
     echo "# adaptive_site_batch_grid=${fish_site_batches[*]}"
     for site_batch in "${fish_site_batches[@]}"; do
       if benchmark_resume_capacity_reached "${resume_report}" \
         "${accelerator_backend}" \
-        "${precision}" "${site_batch}"; then
+        "${precision}" "${site_batch}" actinopt_12k_raxml \
+        "${benchmark_mode}" none; then
         echo "# resume_capacity_limit method=${accelerator_backend}" \
           "precision=${precision}" \
           "site_batch=${site_batch}"
@@ -457,15 +563,18 @@ for precision in "${precisions[@]}"; do
       fi
       if benchmark_resume_dataset_batch_completed "${resume_report}" \
         "${accelerator_backend}" \
-        "${precision}" actinopt_12k_raxml "${site_batch}"; then
+        "${precision}" actinopt_12k_raxml "${site_batch}" \
+        "${benchmark_mode}"; then
         echo "# resume_skip method=${accelerator_backend}" \
           "precision=${precision}" \
-          "dataset=actinopt_12k_raxml site_batch=${site_batch}"
+          "dataset=actinopt_12k_raxml site_batch=${site_batch}" \
+          "benchmark_mode=${benchmark_mode}"
         continue
       fi
       echo "# benchmark_start method=${accelerator_backend}" \
         "precision=${precision}" \
-        "dataset=actinopt_12k_raxml site_batch=${site_batch}"
+        "dataset=actinopt_12k_raxml site_batch=${site_batch}" \
+        "benchmark_mode=${benchmark_mode}"
       benchmark_run_capacity_bounded "${notebook_work_dir}" \
         "$(current_host_memory_guard_kib)" "${accelerator_backend}" \
         "${precision}" \
@@ -474,7 +583,8 @@ for precision in "${precisions[@]}"; do
         --newick "${fish_dir}/actinopt_12k_raxml.tre" \
         --phylip "${fish_dir}/final_alignment.phylip" \
         --site-batch "${site_batch}" \
-        --repeats "${empirical_repeats}"
+        --repeats "${empirical_repeats}" \
+        --benchmark-mode "${benchmark_mode}"
       if [[ "${benchmark_capacity_exhausted}" == "1" ]]; then
         break
       fi
@@ -483,44 +593,62 @@ for precision in "${precisions[@]}"; do
       echo "=== ${precision} Fish Tree of Life BEAGLE comparison ==="
       for resource in "${beagle_resources[@]}"; do
         method="beagle-${resource}"
+        if [[ "${resource}" == cpu ]]; then
+          resource_threads=("${beagle_cpu_thread_counts[@]}")
+        else
+          resource_threads=(1)
+        fi
+        for threads in "${resource_threads[@]}"; do
         benchmark_capacity_exhausted=0
+        benchmark_capacity_dataset=actinopt_12k_raxml
+        benchmark_capacity_mode="${benchmark_mode}"
+        benchmark_capacity_threads="${threads}"
         for site_batch in "${fish_site_batches[@]}"; do
           if benchmark_resume_capacity_reached "${resume_report}" \
-            "${method}" "${precision}" "${site_batch}"; then
+            "${method}" "${precision}" "${site_batch}" \
+            actinopt_12k_raxml "${benchmark_mode}" "${threads}"; then
             echo "# resume_capacity_limit method=${method}" \
               "precision=${precision} site_batch=${site_batch}"
             break
           fi
           if benchmark_resume_dataset_batch_completed "${resume_report}" \
             "${method}" "${precision}" actinopt_12k_raxml \
-            "${site_batch}"; then
+            "${site_batch}" "${benchmark_mode}" "${threads}"; then
             echo "# resume_skip method=${method} precision=${precision}" \
-              "dataset=actinopt_12k_raxml site_batch=${site_batch}"
+              "dataset=actinopt_12k_raxml site_batch=${site_batch}" \
+              "benchmark_mode=${benchmark_mode} threads=${threads}"
             continue
           fi
           echo "# benchmark_start method=${method} precision=${precision}" \
-            "dataset=actinopt_12k_raxml site_batch=${site_batch}"
+            "dataset=actinopt_12k_raxml site_batch=${site_batch}" \
+            "benchmark_mode=${benchmark_mode} threads=${threads}"
           benchmark_run_capacity_bounded "${notebook_work_dir}" \
             "$(current_host_memory_guard_kib)" "${method}" "${precision}" \
             "${site_batch}" bazel-bin/beagle_benchmark \
             --beagle-resource "${resource}" \
-            --beagle-threads 1 \
+            --beagle-threads "${threads}" \
             --newick "${fish_dir}/actinopt_12k_raxml.tre" \
             --phylip "${fish_dir}/final_alignment.phylip" \
             --site-batch "${site_batch}" \
-            --repeats "${empirical_repeats}"
+            --repeats "${empirical_repeats}" \
+            --benchmark-mode "${benchmark_mode}"
           if [[ "${benchmark_capacity_exhausted}" == "1" ]]; then
             break
           fi
         done
+        done
       done
     fi
+    done
   fi
 
   if benchmark_section_enabled pandit &&
      [[ "${TREE_HMM_SKIP_PANDIT:-0}" != "1" ]]; then
     echo "=== ${precision} PANDIT 17.0 corpus benchmark ==="
+    for benchmark_mode in "${pandit_benchmark_modes[@]}"; do
     PRECISION="${precision_config}" PANDIT_SKIP_BUILD=1 \
+      PANDIT_LIMIT="${pandit_limit}" \
+      TREE_HMM_BENCHMARK_MODE="${benchmark_mode}" \
       TREE_HMM_RESUME_REPORT="${resume_report}" \
       TREE_HMM_EMPIRICAL_REPEATS="${empirical_repeats}" \
       bash "${repo_dir}/scripts/benchmark_pandit.sh" \
@@ -532,12 +660,23 @@ for precision in "${precisions[@]}"; do
         beagle_pandit_resources+=(beagle-cuda)
       fi
       for resource in "${beagle_pandit_resources[@]}"; do
-        PRECISION="${precision_config}" PANDIT_SKIP_BUILD=1 \
-          TREE_HMM_RESUME_REPORT="${resume_report}" \
-          TREE_HMM_EMPIRICAL_REPEATS="${empirical_repeats}" \
-          bash "${repo_dir}/scripts/benchmark_pandit.sh" "${resource}" \
-            "${pandit_dir}/families"
+        if [[ "${resource}" == beagle-cpu ]]; then
+          resource_threads=("${beagle_cpu_thread_counts[@]}")
+        else
+          resource_threads=(1)
+        fi
+        for threads in "${resource_threads[@]}"; do
+          PRECISION="${precision_config}" PANDIT_SKIP_BUILD=1 \
+            PANDIT_LIMIT="${pandit_limit}" \
+            TREE_HMM_BENCHMARK_MODE="${benchmark_mode}" \
+            BEAGLE_THREADS="${threads}" \
+            TREE_HMM_RESUME_REPORT="${resume_report}" \
+            TREE_HMM_EMPIRICAL_REPEATS="${empirical_repeats}" \
+            bash "${repo_dir}/scripts/benchmark_pandit.sh" "${resource}" \
+              "${pandit_dir}/families"
+        done
       done
     fi
+    done
   fi
 done

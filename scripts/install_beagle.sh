@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-version="${BEAGLE_VERSION_LABEL:-4.0.1}"
-source_revision="${BEAGLE_SOURCE_REVISION:-v4.0.1}"
-source_url="${BEAGLE_SOURCE_URL:-https://github.com/beagle-dev/beagle-lib/archive/refs/tags/v4.0.1.tar.gz}"
-archive_sha256="${BEAGLE_SOURCE_SHA256:-9d258cd9bedd86d7c28b91587acd1132f4e01d4f095c657ad4dc93bd83d4f120}"
+version="${BEAGLE_VERSION_LABEL:-4.1.0-pre-release-d1e9c62}"
+source_revision="${BEAGLE_SOURCE_REVISION:-d1e9c62f922cf544fda4555aedf113519367c07a}"
+source_url="${BEAGLE_SOURCE_URL:-https://github.com/beagle-dev/beagle-lib/archive/d1e9c62f922cf544fda4555aedf113519367c07a.tar.gz}"
+archive_sha256="${BEAGLE_SOURCE_SHA256:-55da832b6cde0e65872926b312fcc9f2b03c719b2ebdaabc309e2581c5725705}"
 if [[ ! "${archive_sha256}" =~ ^[0-9a-fA-F]{64}$ ]]; then
   echo "BEAGLE_SOURCE_SHA256 must be the exact archive SHA-256" >&2
   exit 2
@@ -41,7 +41,7 @@ if [[ "${backend}" == cuda ]]; then
     exit 1
   fi
 
-# BEAGLE 4.0.1 links its plugin with -lcuda, but its CMake file does not add
+# BEAGLE's CUDA plugin links with -lcuda, but its CMake file does not add
 # the directory containing libcuda.so.  Prefer the toolkit stub when present;
 # hosted GPU environments may instead expose the unversioned driver link under
 # /usr/local/nvidia or the toolkit compatibility directory.  A final fallback
@@ -132,8 +132,7 @@ if [[ "${backend}" == cuda ]]; then
 fi
 
 archive="${work_root}/beagle-lib-${version}.tar.gz"
-source_directory="${work_root}/beagle-lib-${version}"
-build_directory="${work_root}/build-${version}-${backend}"
+build_directory="${work_root}/build-${archive_sha256}-${backend}"
 if [[ ! -f "${archive}" ]] ||
    ! printf '%s  %s\n' "${archive_sha256}" "${archive}" |
      sha256sum --check --status; then
@@ -146,8 +145,35 @@ if [[ ! -f "${archive}" ]] ||
   mv "${temporary}" "${archive}"
 fi
 
+archive_root="$(
+  tar -tzf "${archive}" | awk -F/ '
+    NF && $1 != "" {
+      if (root == "") root = $1
+      else if ($1 != root) exit 2
+    }
+    END {
+      if (root == "") exit 3
+      print root
+    }
+  '
+)" || {
+  echo "BEAGLE archive must contain exactly one top-level directory" >&2
+  exit 1
+}
+if [[ ! "${archive_root}" =~ ^[A-Za-z0-9._-]+$ ||
+      "${archive_root}" == "." || "${archive_root}" == ".." ]]; then
+  echo "unsafe BEAGLE archive root: ${archive_root}" >&2
+  exit 1
+fi
+extraction_directory="${work_root}/source-${archive_sha256}"
+source_directory="${extraction_directory}/${archive_root}"
 if [[ ! -f "${source_directory}/CMakeLists.txt" ]]; then
-  tar -xzf "${archive}" -C "${work_root}"
+  mkdir -p "${extraction_directory}"
+  tar -xzf "${archive}" -C "${extraction_directory}"
+fi
+if [[ ! -f "${source_directory}/CMakeLists.txt" ]]; then
+  echo "BEAGLE archive root does not contain CMakeLists.txt" >&2
+  exit 1
 fi
 cmake -S "${source_directory}" -B "${build_directory}" \
   -DCMAKE_BUILD_TYPE=Release \

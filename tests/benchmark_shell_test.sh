@@ -49,24 +49,69 @@ work_directory="$(mktemp -d "${TMPDIR:-/tmp}/benchmark-shell-test.XXXXXX")"
 trap 'rm -rf "${work_directory}"' EXIT
 new_report="${work_directory}/new-report.txt"
 cat > "${new_report}" <<'EOF'
-backend,precision,dataset,topology,seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,site_batch
-cuda,FP32,synthetic,yule,20260813,91,0,128,255,64,64,64
-cuda,FP32,synthetic,yule,20260813,92,2,128,255,64,64,64
+backend,precision,benchmark_mode,dataset,topology,seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,site_batch
+cuda,FP32,factor-update,synthetic,yule,20260813,91,0,128,255,64,64,64
+cuda,FP32,fixed-model,synthetic,yule,20260813,92,2,128,255,64,64,64
 baseline,beagle_resource,precision,benchmark_mode,dataset,topology,seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,site_batch,threads
 beagle,cuda,FP32,factor-update,synthetic,yule,20260813,91,0,128,255,64,64,64,1
 EOF
 benchmark_resume_synthetic_replicate_completed "${new_report}" cuda FP32 \
-  yule 128 64 20260813 0
+  yule 128 64 20260813 0 factor-update
+! benchmark_resume_synthetic_replicate_completed "${new_report}" cuda FP32 \
+  yule 128 64 20260813 0 fixed-model
 ! benchmark_resume_synthetic_replicate_completed "${new_report}" cuda FP32 \
   yule 128 64 20260813 1
 benchmark_resume_synthetic_replicate_completed "${new_report}" cuda FP32 \
-  yule 128 64 20260813 2
+  yule 128 64 20260813 2 fixed-model
 benchmark_resume_synthetic_replicate_completed "${new_report}" beagle-cuda \
   FP32 yule 128 64 20260813 0 factor-update 1
 ! benchmark_resume_synthetic_replicate_completed "${new_report}" beagle-cuda \
   FP32 yule 128 64 20260813 0 fixed-model 1
 ! benchmark_resume_synthetic_replicate_completed "${new_report}" beagle-cuda \
   FP32 yule 128 64 20260813 0 factor-update 2
+
+mixed_report="${work_directory}/mixed-report.txt"
+cat > "${mixed_report}" <<'EOF'
+backend,precision,task,dataset,topology,seed_base,seed,replicate,leaves,nodes,unique_patterns,tree_height,normalized_colless,primitive_levels,benchmark_mode,planning_ms,workspace_setup_ms,repeats,median_ms,p25_ms,p75_ms,samples_ms
+cuda,FP32,likelihood,synthetic,yule,20260813,91,0,128,255,64,18,0.1,24,full-input-update,0.2,0.3,3,1.0,0.9,1.1,0.9;1.0;1.1
+backend,precision,benchmark_mode,dataset,topology,leaves,nodes,sites,unique_patterns,site_batch,cpu_ms,measured_total_ms,max_abs_error,max_relative_error
+cuda,FP32,full-input-update,synthetic,yule,128,255,64,64,64,2.0,1.0,0.001,0.0001
+EOF
+python3 "${root}/scripts/summarize_benchmarks.py" "${mixed_report}" \
+  --precision FP32 --benchmark-mode full-input-update \
+  > "${work_directory}/mixed-summary.csv"
+grep -Fq 'cuda' "${work_directory}/mixed-summary.csv"
+! grep -Fq 'likelihood' "${work_directory}/mixed-summary.csv"
+
+manifest_directory="${work_directory}/generic-corpus"
+mkdir -p "${manifest_directory}"
+cat > "${manifest_directory}/manifest.csv" <<'EOF'
+dataset,taxa,raw_sites,unique_patterns,alignment,pattern_weights,tree
+small,4,100,100,small.fa,small.weights,small.nwk
+large,10,100000,100000,large.fa,large.weights,large.nwk
+EOF
+printf '%s\n' 'corpus_name=generic-test' > \
+  "${manifest_directory}/corpus_metadata.txt"
+manifest_resume="${manifest_directory}/prior-report.txt"
+cat > "${manifest_resume}" <<'EOF'
+backend,precision,benchmark_mode,dataset,topology,leaves,nodes,sites,unique_patterns,site_batch,max_abs_error,max_relative_error
+metal,FP32,full-input-update,small,empirical,4,7,100,100,100,0,0
+# capacity_limit method=metal precision=FP32 dataset=large benchmark_mode=full-input-update threads=none first_infeasible_site_batch=1024 reason=allocation-failure
+EOF
+TREE_HMM_DRY_RUN=1 TREE_HMM_HOST_MEMORY_GUARD_KIB=262144 \
+TREE_HMM_EMPIRICAL_SITE_BATCHES='256 1024 4096' \
+TREE_HMM_RESUME_REPORT="${manifest_resume}" \
+  bash "${root}/scripts/benchmark_empirical_manifest.sh" metal \
+    "${manifest_directory}/manifest.csv" > \
+    "${manifest_directory}/dry-run.txt"
+grep -Fq '# corpus_name=generic-test' "${manifest_directory}/dry-run.txt"
+grep -Fq '# planned_cases=4' "${manifest_directory}/dry-run.txt"
+grep -Fq '# resume_skip method=metal precision=FP32 dataset=small site_batch=100' \
+  "${manifest_directory}/dry-run.txt"
+grep -Fq '# resume_capacity_limit method=metal precision=FP32 dataset=large site_batch=1024' \
+  "${manifest_directory}/dry-run.txt"
+! grep -Fq 'dataset=large taxa=10 raw_sites=100000 unique_patterns=100000 site_batch=4096' \
+  "${manifest_directory}/dry-run.txt"
 mock_rocm="${work_directory}/rocm"
 mkdir -p "${mock_rocm}/bin" "${mock_rocm}/lib"
 printf '%s\n' '#!/usr/bin/env bash' 'echo "  Name: gfx942"' > \
@@ -212,8 +257,23 @@ cat > "${source_root}/parallel_phylogenetic_inference/scripts/notebook_rocm.sh" 
 printf 'rocm stub precision=%s\n' "${TREE_HMM_PRECISIONS}"
 EOF
 cache_identity="$({
-  echo 'parallel-phylogenetics-benchmark-schema=3'
+  echo 'parallel-phylogenetics-benchmark-schema=4'
+  echo 'benchmark-profile=curated'
   echo 'accelerator-backend=cuda'
+  echo 'hardware=test-hardware'
+  echo "host-cpu=$(grep -m1 -E 'model name|Hardware' /proc/cpuinfo 2>/dev/null || uname -m)"
+  echo 'precisions=FP32'
+  echo 'sections=fish pandit'
+  echo 'modes=full-input-update'
+  echo 'synthetic-modes=full-input-update factor-update fixed-model'
+  echo 'fish-modes=full-input-update'
+  echo 'pandit-modes=full-input-update'
+  echo 'task-modes=full-input-update'
+  echo 'pandit-limit=25'
+  echo 'repeats=15'
+  echo 'empirical-repeats=3'
+  echo 'conditioning-ms=0'
+  echo 'beagle-cpu-threads=1 1'
   sort "${source_root}/SOURCE_REVISIONS.txt"
 } | shasum -a 256 | awk '{ print $1 }')"
 printf '# cache_identity sha256=%s\nprevious-row\n' "${cache_identity}" > \
@@ -222,6 +282,8 @@ TREE_HMM_NOTEBOOK_INPUT_DIR="${launcher_root}/input" \
 TREE_HMM_NOTEBOOK_WORKING_DIR="${working_root}" \
 TREE_HMM_PRECISIONS_OVERRIDE=FP32 TREE_HMM_SKIP_FISH_TREE=1 \
 TREE_HMM_BENCHMARK_SECTIONS="fish pandit" \
+TREE_HMM_HARDWARE_IDENTITY_OVERRIDE=test-hardware \
+TREE_HMM_BEAGLE_CPU_THREADS='1 1' \
   bash "${root}/scripts/kaggle_cuda_notebook.sh" "${source_root}" \
   > "${launcher_root}/unpacked.log"
 grep -Fq 'using unpacked source input' "${launcher_root}/unpacked.log"
@@ -256,8 +318,8 @@ TREE_HMM_PRECISIONS_OVERRIDE=FP64 TREE_HMM_SKIP_FISH_TREE=0 \
   bash "${root}/scripts/kaggle_cuda_notebook.sh" "${source_zip}" \
   > "${launcher_root}/zip.log"
 grep -Fq 'source bundle SHA-256:' "${launcher_root}/zip.log"
-grep -Fq 'lines in the working report' "${launcher_root}/zip.log"
-grep -Fq 'working-only-row' \
+grep -Fq 'different source identity' "${launcher_root}/zip.log"
+! grep -Fq 'working-only-row' \
   "${working_root}/parallel_phylogenetics_cuda_report.txt"
 grep -Fq 'stub precision=FP64 skip_fish=0' \
   "${working_root}/parallel_phylogenetics_cuda_report.txt"

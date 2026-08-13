@@ -9,10 +9,12 @@ sh_test(
     srcs = ["tests/benchmark_shell_test.sh"],
     data = [
         "scripts/accelerator_environment.sh",
+        "scripts/benchmark_empirical_manifest.sh",
         "scripts/benchmark_resume.sh",
         "scripts/capacity_bounded.sh",
         "scripts/kaggle_accelerator_notebook.sh",
         "scripts/kaggle_cuda_notebook.sh",
+        "scripts/summarize_benchmarks.py",
         "tests/benchmark_report_fixture.txt",
     ],
 )
@@ -269,8 +271,7 @@ cc_binary(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
-        ":parallel_phylogenetics",
-        "@parallel_tree_hmm//:tree_hmm_metal",
+        ":parallel_phylogenetics_metal",
     ],
 )
 
@@ -302,8 +303,7 @@ cc_binary(
     ],
     target_compatible_with = requires_cuda(),
     deps = [
-        ":parallel_phylogenetics",
-        "@parallel_tree_hmm//:tree_hmm_cuda",
+        ":parallel_phylogenetics_cuda",
     ],
 )
 
@@ -334,8 +334,7 @@ cc_binary(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
-        ":parallel_phylogenetics",
-        "@parallel_tree_hmm//:tree_hmm_rocm",
+        ":parallel_phylogenetics_rocm",
     ],
 )
 

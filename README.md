@@ -166,8 +166,9 @@ PRECISION=fp64 scripts/benchmark_beagle.sh \
   --beagle-resource cpu --beagle-threads 1 --repeats 5
 ```
 
-On Linux, `scripts/install_beagle.sh` checksum-verifies and builds the pinned
-BEAGLE 4.0.1 release for the CPU and, when requested, with its CUDA plugin. The
+On Linux, `scripts/install_beagle.sh` checksum-verifies and builds upstream
+commit `d1e9c62f922cf544fda4555aedf113519367c07a`, identified as a BEAGLE
+4.1.0 pre-release, for the CPU and, when requested, with its CUDA plugin. The
 optional local dependency is discovered through `BEAGLE_PREFIX`; ordinary
 Bazel targets remain buildable when BEAGLE is absent. Exact alternative source
 commits can be selected with `BEAGLE_VERSION_LABEL`,
@@ -196,14 +197,27 @@ PRECISION=fp32 TREE_HMM_BENCHMARK_MODE=factor-update \
   BEAGLE_THREADS=1 scripts/benchmark_synthetic_distributions.sh beagle-cpu
 scripts/plot_synthetic_study.py native.log beagle.log \
   --native cuda --baseline beagle-cpu --precision FP32 \
-  --benchmark-mode factor-update --output-directory figures
+  --benchmark-mode factor-update --run-identity same-machine-protocol \
+  --output-directory figures
 ```
 
-BEAGLE rows distinguish `fixed-model` (all observations and numerical factors
+Native and BEAGLE rows distinguish `fixed-model` (all observations and numerical factors
 already installed), `factor-update` (observations retained while JC69 factors
-and transition matrices are refreshed), and `full-input-update` (tips, pattern
-weights, and factors refreshed). The modes are never combined into one
-speedup. `cuda_tasks_benchmark`, `rocm_tasks_benchmark`, and
+and transition matrices are refreshed), and `full-input-update` (tips and
+factors refreshed). Pattern multiplicities are fixed compression metadata:
+both timed methods produce per-unique-pattern log likelihoods, and the true
+multiplicities are applied outside the timed region. The modes are never
+combined into one speedup. Native resident timings stage each exact site chunk once with a
+separately reported, untimed `full-input-update` call, then perform all timed
+repetitions before reusing the workspace for another chunk; they do not imply
+that a capacity-bounded full alignment is simultaneously device-resident.
+BEAGLE receives unambiguous or missing tips in its compact-state form and uses
+partial vectors only for genuinely ambiguous IUPAC tips. The exception is the
+BEAGLE 4.1 pre-release CPU implementation during full-input or chunked runs:
+those rows deliberately use reusable partial buffers because that version's
+repeated compact-state setter allocates without reusing its prior buffer. Each
+row records the compact and partial tip counts.
+`cuda_tasks_benchmark`, `rocm_tasks_benchmark`, and
 `metal_tasks_benchmark` separately time likelihoods, all node and edge
 marginals, joint MAP assignments, and posterior samples through the public
 prepared APIs.
@@ -238,8 +252,16 @@ records embedded in a complete CUDA notebook report are summarized with
 
 ```sh
 scripts/summarize_benchmarks.py report.txt \
-  --dataset-prefix PF --precision FP32 --corpus cuda
+  --dataset-prefix PF --precision FP32 \
+  --benchmark-mode full-input-update --corpus cuda \
+  --max-abs-error 0.1 --max-relative-error 0.001
 ```
+
+Multiple input logs must carry the same notebook cache identity. For logs
+captured outside that workflow, `--run-identity` is an explicit assertion that
+the hardware and benchmark protocol match; data from different machines are
+never pooled implicitly. Chunked resident-mode projections are excluded from
+the publication summaries and plots.
 
 The Fish Tree of Life supplies a much larger empirical nucleotide case with
 11,638 taxa and 24,143 sites. `scripts/fetch_fish_tree.sh` downloads and
@@ -250,14 +272,23 @@ capacities; it does not truncate or replicate the data.
 ## Reproducible accelerator runs
 
 `scripts/benchmark_metal.sh` runs the standard local Metal scaling sweep.
+Optional environment flags add the synthetic distribution and reverse-task
+studies, while `TREE_HMM_EMPIRICAL_MANIFEST` runs any prepared public corpus
+through the same capacity-bounded manifest driver.
 `notebooks/kaggle_accelerator_benchmark.ipynb` detects an NVIDIA or AMD GPU,
 builds both Linux accelerator backends from checksum-pinned SDKs, executes the
 backend matching the detected device, and records the host and device
 configuration. CUDA execution is additionally checked with Compute Sanitizer.
+Its default `curated` profile runs the complete large-data comparisons, a
+25-family paired PANDIT cohort, and representative unchunked resident cases.
+`TREE_HMM_BENCHMARK_PROFILE=complete` enables every precision, mode,
+distribution replicate, task, and PANDIT family; individual section and mode
+variables remain available as explicit overrides.
 Before native execution, the launcher verifies that the host NVIDIA driver is
 new enough for the pinned CUDA toolkit or that the pinned ROCm runtime can
 enumerate the selected AMD device through the host kernel driver. The notebook
-compares against pinned BEAGLE 4.0.1 on the CPU and, on NVIDIA, the CUDA device,
+compares against the pinned BEAGLE 4.1.0 pre-release commit on the CPU and, on
+NVIDIA, the CUDA device,
 then evaluates the 325-family PANDIT subset and complete Fish Tree of Life
 alignment in matched FP64 and FP32. For capacity-bounded alignment runs, each
 method tries geometrically increasing site batches up to the complete

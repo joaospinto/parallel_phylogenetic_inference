@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import statistics
 import sys
 from collections import defaultdict
@@ -13,14 +14,59 @@ from pathlib import Path
 
 IDENTITY = (
     "precision",
+    "benchmark_mode",
     "dataset",
     "topology",
     "leaves",
     "nodes",
     "sites",
+    "unique_patterns",
     "site_batch",
 )
-PROBLEM = IDENTITY[:-1]
+
+
+def row_identity(row: dict[str, str], include_site_batch: bool = True) -> tuple[str, ...]:
+    fields = IDENTITY if include_site_batch else IDENTITY[:-1]
+    identity = tuple(row[field] for field in fields)
+    if row["dataset"].startswith("synthetic"):
+        identity += tuple(
+            row.get(field, "")
+            for field in (
+                "sequence_generation",
+                "evolutionary_root_to_tip_distance",
+                "seed_base",
+                "seed",
+                "replicate",
+            )
+        )
+    return identity
+
+
+def validate_run_identity(paths: list[Path], override: str | None) -> str:
+    if override is not None:
+        return override
+    prefix = "# cache_identity sha256="
+    identities: list[str | None] = []
+    for path in paths:
+        found = {
+            line.strip()[len(prefix) :]
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip().startswith(prefix)
+        }
+        if len(found) > 1:
+            raise ValueError(f"{path} contains multiple cache identities")
+        identities.append(next(iter(found)) if found else None)
+    if len(paths) == 1 and identities[0] is None:
+        return str(paths[0].resolve())
+    if any(identity is None for identity in identities):
+        raise ValueError(
+            "multiple logs must carry one common cache identity; otherwise "
+            "supply --run-identity after verifying that they came from the "
+            "same hardware and benchmark protocol"
+        )
+    if len(set(identities)) != 1:
+        raise ValueError("benchmark logs have different cache identities")
+    return str(identities[0])
 
 
 def records(paths: list[Path]) -> list[dict[str, str]]:
@@ -34,7 +80,13 @@ def records(paths: list[Path]) -> list[dict[str, str]]:
                     continue
                 fields = next(csv.reader([line]))
                 if fields[0] in {"backend", "baseline"}:
-                    header = fields
+                    header = (
+                        fields
+                        if "measured_total_ms" in fields
+                        or "end_to_end_ms" in fields
+                        or "beagle_total_ms" in fields
+                        else None
+                    )
                     continue
                 if header is None or fields[0] not in {
                     "cuda",
@@ -49,6 +101,9 @@ def records(paths: list[Path]) -> list[dict[str, str]]:
                         f"fields, found {len(fields)}"
                     )
                 row = dict(zip(header, fields))
+                row.setdefault("benchmark_mode", "full-input-update")
+                if row.get("baseline") == "beagle":
+                    row.setdefault("threads", "1")
                 missing = [field for field in IDENTITY if field not in row]
                 if missing:
                     raise ValueError(
@@ -56,6 +111,33 @@ def records(paths: list[Path]) -> list[dict[str, str]]:
                         f"missing required columns {', '.join(missing)}"
                     )
                 row["source"] = str(path)
+                row["measurement_scope"] = (
+                    "complete-alignment-wall-time"
+                    if row["benchmark_mode"] == "full-input-update"
+                    or row["site_batch"] == row["unique_patterns"]
+                    else "sum-of-per-chunk-resident-calls"
+                )
+                for field in ("max_abs_error", "max_relative_error"):
+                    if not math.isfinite(number(row, field)):
+                        raise ValueError(
+                            f"nonfinite {field} in benchmark record from {path}:{line_number}"
+                        )
+                total_fields = (
+                    "measured_total_ms",
+                    "end_to_end_ms",
+                    "total_accelerator_ms",
+                    "beagle_total_ms",
+                )
+                total_field = next(
+                    (field for field in total_fields if field in row), None
+                )
+                if total_field is None or not math.isfinite(
+                    number(row, total_field)
+                ) or number(row, total_field) <= 0.0:
+                    raise ValueError(
+                        f"nonpositive or nonfinite elapsed time in benchmark "
+                        f"record from {path}:{line_number}"
+                    )
                 result.append(row)
     if not result:
         raise ValueError("no benchmark CSV records found")
@@ -71,7 +153,9 @@ def method(row: dict[str, str]) -> str:
             raise ValueError(
                 "BEAGLE records must include beagle_resource=cpu or cuda"
             )
-        return f"beagle_{resource}"
+        if resource == "cpu":
+            return f"beagle_cpu_{row['threads']}t"
+        return "beagle_cuda"
     raise ValueError(f"unrecognized benchmark record from {row['source']}")
 
 
@@ -88,13 +172,24 @@ def median_rows(rows: list[dict[str, str]]) -> dict[str, object]:
     first = rows[0]
     native = method(first) in {"cuda", "metal", "rocm"}
     total_field = (
-        "end_to_end_ms"
+        "measured_total_ms"
+        if native and "measured_total_ms" in first
+        else "end_to_end_ms"
         if native and "end_to_end_ms" in first
         else "total_accelerator_ms"
         if native
         else "beagle_total_ms"
     )
     result: dict[str, object] = {field: first[field] for field in IDENTITY}
+    for field in (
+        "sequence_generation",
+        "evolutionary_root_to_tip_distance",
+        "seed_base",
+        "seed",
+        "replicate",
+    ):
+        if field in first:
+            result[field] = first[field]
     result.update(
         method=method(first),
         measurements=len(rows),
@@ -115,14 +210,17 @@ def median_rows(rows: list[dict[str, str]]) -> dict[str, object]:
 def aggregate(rows: list[dict[str, str]]) -> list[dict[str, object]]:
     groups: dict[tuple[str, ...], list[dict[str, str]]] = defaultdict(list)
     for row in rows:
-        groups[(method(row), *(row[field] for field in IDENTITY))].append(row)
+        groups[(method(row), *row_identity(row))].append(row)
     return [median_rows(group) for group in groups.values()]
 
 
 def best_batches(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     groups: dict[tuple[str, ...], list[dict[str, object]]] = defaultdict(list)
     for row in rows:
-        key = (str(row["method"]), *(str(row[field]) for field in PROBLEM))
+        key = (
+            str(row["method"]),
+            *row_identity({field: str(value) for field, value in row.items()}, False),
+        )
         groups[key].append(row)
     return [
         min(group, key=lambda row: float(row["total_ms"]))
@@ -143,7 +241,7 @@ def percentile(values: list[float], probability: float) -> float:
 
 def write_best(rows: list[dict[str, object]]) -> None:
     fields = [
-        *PROBLEM,
+        *IDENTITY[:-1],
         "method",
         "site_batch",
         "measurements",
@@ -156,7 +254,7 @@ def write_best(rows: list[dict[str, object]]) -> None:
     writer = csv.DictWriter(sys.stdout, fieldnames=fields, extrasaction="ignore")
     writer.writeheader()
     for row in sorted(
-        rows, key=lambda item: tuple(str(item[field]) for field in fields[:7])
+        rows, key=lambda item: tuple(str(item.get(field, "")) for field in fields[:7])
     ):
         writer.writerow(row)
 
@@ -166,7 +264,9 @@ def write_corpus(rows: list[dict[str, object]], accelerator: str) -> None:
         tuple[str, ...], dict[str, dict[str, object]]
     ] = defaultdict(dict)
     for row in rows:
-        key = tuple(str(row[field]) for field in PROBLEM)
+        key = row_identity(
+            {field: str(value) for field, value in row.items()}, False
+        )
         by_problem[key][str(row["method"])] = row
     native = [
         methods[accelerator]
@@ -182,7 +282,15 @@ def write_corpus(rows: list[dict[str, object]], accelerator: str) -> None:
             float(row["cpu_ms"]) / float(row["total_ms"]) for row in native
         ]
     }
-    for beagle_method in ("beagle_cpu", "beagle_cuda"):
+    beagle_methods = sorted(
+        {
+            method
+            for methods in by_problem.values()
+            for method in methods
+            if method.startswith("beagle_cpu_") or method == "beagle_cuda"
+        }
+    )
+    for beagle_method in beagle_methods:
         pairs = [
             (methods[accelerator], methods[beagle_method])
             for methods in by_problem.values()
@@ -230,7 +338,23 @@ def main() -> None:
     parser.add_argument("--corpus", choices=("cuda", "metal", "rocm"))
     parser.add_argument("--dataset-prefix")
     parser.add_argument("--precision", choices=("FP32", "FP64"))
+    parser.add_argument(
+        "--benchmark-mode",
+        choices=("fixed-model", "factor-update", "full-input-update"),
+    )
+    parser.add_argument(
+        "--include-resident-projections",
+        action="store_true",
+        help="include chunked factor/fixed diagnostic projections",
+    )
+    parser.add_argument("--max-abs-error", type=float)
+    parser.add_argument("--max-relative-error", type=float)
+    parser.add_argument(
+        "--run-identity",
+        help="declared common run identity for logs without cache markers",
+    )
     arguments = parser.parse_args()
+    validate_run_identity(arguments.logs, arguments.run_identity)
     raw_rows = records(arguments.logs)
     if arguments.dataset_prefix is not None:
         raw_rows = [
@@ -250,6 +374,65 @@ def main() -> None:
         if not raw_rows:
             raise ValueError(
                 f"no benchmark records use precision {arguments.precision}"
+            )
+    if arguments.benchmark_mode is not None:
+        raw_rows = [
+            row
+            for row in raw_rows
+            if row["benchmark_mode"] == arguments.benchmark_mode
+        ]
+        if not raw_rows:
+            raise ValueError(
+                "no benchmark records use mode "
+                f"{arguments.benchmark_mode}"
+            )
+    if not arguments.include_resident_projections:
+        raw_rows = [
+            row
+            for row in raw_rows
+            if row["measurement_scope"] == "complete-alignment-wall-time"
+        ]
+        if not raw_rows:
+            raise ValueError(
+                "all selected rows are chunked resident projections; pass "
+                "--include-resident-projections to summarize diagnostics"
+            )
+    if arguments.corpus and (
+        arguments.precision is None or arguments.benchmark_mode is None
+    ):
+        raise ValueError(
+            "--corpus requires --precision and --benchmark-mode so distinct "
+            "measurement protocols are never pooled"
+        )
+    if arguments.corpus and (
+        arguments.max_abs_error is None
+        or arguments.max_relative_error is None
+    ):
+        raise ValueError(
+            "--corpus requires explicit --max-abs-error and "
+            "--max-relative-error acceptance thresholds"
+        )
+    if arguments.max_abs_error is not None:
+        rejected = [
+            row
+            for row in raw_rows
+            if number(row, "max_abs_error") > arguments.max_abs_error
+        ]
+        if rejected:
+            raise ValueError(
+                f"{len(rejected)} benchmark records exceed --max-abs-error"
+            )
+    if arguments.max_relative_error is not None:
+        rejected = [
+            row
+            for row in raw_rows
+            if number(row, "max_relative_error")
+            > arguments.max_relative_error
+        ]
+        if rejected:
+            raise ValueError(
+                f"{len(rejected)} benchmark records exceed "
+                "--max-relative-error"
             )
     rows = best_batches(aggregate(raw_rows))
     if arguments.corpus:

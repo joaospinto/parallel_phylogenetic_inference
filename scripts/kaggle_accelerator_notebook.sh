@@ -82,10 +82,54 @@ if [[ "${accelerator_backend}" != cuda &&
 fi
 echo "selected notebook accelerator: ${accelerator_backend}"
 report="${notebook_working_dir}/parallel_phylogenetics_${accelerator_backend}_report.txt"
+if [[ -n "${TREE_HMM_HARDWARE_IDENTITY_OVERRIDE:-}" ]]; then
+  hardware_identity="${TREE_HMM_HARDWARE_IDENTITY_OVERRIDE}"
+elif [[ "${accelerator_backend}" == cuda ]] && command -v nvidia-smi >/dev/null; then
+  hardware_identity="$(nvidia-smi --query-gpu=name,compute_cap,driver_version,memory.total \
+    --format=csv,noheader -i 0 | head -1)"
+elif [[ "${accelerator_backend}" == rocm ]]; then
+  hardware_identity="$(tree_hmm_detect_rocm_arch)"
+else
+  hardware_identity=unavailable
+fi
+if command -v nproc >/dev/null 2>&1; then
+  logical_core_count="$(nproc)"
+else
+  logical_core_count="$(getconf _NPROCESSORS_ONLN)"
+fi
 cache_identity="$(
   {
-    echo "parallel-phylogenetics-benchmark-schema=3"
+    benchmark_profile="${TREE_HMM_BENCHMARK_PROFILE:-curated}"
+    if [[ "${benchmark_profile}" == complete ]]; then
+      default_sections="validation synthetic distributions tasks fish pandit"
+      default_modes="full-input-update factor-update fixed-model"
+      default_synthetic_modes="${default_modes}"
+      default_task_modes="${default_modes}"
+      default_pandit_limit=0
+    else
+      default_sections="validation synthetic fish pandit"
+      default_modes="full-input-update"
+      default_synthetic_modes="full-input-update factor-update fixed-model"
+      default_task_modes="full-input-update"
+      default_pandit_limit=25
+    fi
+    echo "parallel-phylogenetics-benchmark-schema=4"
+    echo "benchmark-profile=${benchmark_profile}"
     echo "accelerator-backend=${accelerator_backend}"
+    echo "hardware=${hardware_identity}"
+    echo "host-cpu=$(grep -m1 -E 'model name|Hardware' /proc/cpuinfo 2>/dev/null || uname -m)"
+    echo "precisions=${TREE_HMM_PRECISIONS_OVERRIDE:-FP64 FP32}"
+    echo "sections=${TREE_HMM_BENCHMARK_SECTIONS:-${default_sections}}"
+    echo "modes=${TREE_HMM_BENCHMARK_MODES:-${default_modes}}"
+    echo "synthetic-modes=${TREE_HMM_SYNTHETIC_BENCHMARK_MODES:-${default_synthetic_modes}}"
+    echo "fish-modes=${TREE_HMM_FISH_BENCHMARK_MODES:-${default_modes}}"
+    echo "pandit-modes=${TREE_HMM_PANDIT_BENCHMARK_MODES:-${default_modes}}"
+    echo "task-modes=${TREE_HMM_TASK_BENCHMARK_MODES:-${default_task_modes}}"
+    echo "pandit-limit=${PANDIT_LIMIT:-${default_pandit_limit}}"
+    echo "repeats=${TREE_HMM_BENCHMARK_REPEATS:-15}"
+    echo "empirical-repeats=${TREE_HMM_EMPIRICAL_REPEATS:-3}"
+    echo "conditioning-ms=${TREE_HMM_BENCHMARK_CONDITIONING_MS:-0}"
+    echo "beagle-cpu-threads=${TREE_HMM_BEAGLE_CPU_THREADS:-1 ${logical_core_count}}"
     sort "${work}/SOURCE_REVISIONS.txt"
   } | sha256_stream
 )"
@@ -105,20 +149,31 @@ else
     echo "existing report has a different source identity; preserved as" \
       "${stale_report}"
   fi
-  prior_report="$(find "${notebook_input_dir}" -type f \
+  prior_report=""
+  prior_lines=0
+  while IFS= read -r candidate; do
+    if report_matches_sources "${candidate}"; then
+      candidate_lines="$(wc -l < "${candidate}")"
+      if [[ "${candidate_lines}" -gt "${prior_lines}" ]]; then
+        prior_report="${candidate}"
+        prior_lines="${candidate_lines}"
+      fi
+    fi
+  done < <(find "${notebook_input_dir}" -type f \
     -name "parallel_phylogenetics_${accelerator_backend}_report*.txt" \
-    -print -quit || true)"
-  if [[ -z "${prior_report}" &&
-        -f "${work}/PREVIOUS_BENCHMARK_REPORT.txt" ]]; then
-    prior_report="${work}/PREVIOUS_BENCHMARK_REPORT.txt"
+    -print | sort)
+  packaged_report="${work}/PREVIOUS_BENCHMARK_REPORT.txt"
+  if report_matches_sources "${packaged_report}"; then
+    packaged_lines="$(wc -l < "${packaged_report}")"
+    if [[ "${packaged_lines}" -gt "${prior_lines}" ]]; then
+      prior_report="${packaged_report}"
+    fi
   fi
-  if [[ -n "${prior_report}" ]] && report_matches_sources "${prior_report}"; then
+  if [[ -n "${prior_report}" ]]; then
     cp "${prior_report}" "${report}"
     echo "resuming from $(wc -l < "${prior_report}") previously recorded lines"
   else
-    if [[ -n "${prior_report}" ]]; then
-      echo "ignoring prior report with a different source identity"
-    fi
+    echo "no prior report matches the current source identity"
     printf '%s\n' "${cache_marker}" > "${report}"
   fi
 fi

@@ -21,6 +21,7 @@ limit="${PANDIT_LIMIT:-0}"
 repeats="${TREE_HMM_EMPIRICAL_REPEATS:-3}"
 conditioning_ms="${TREE_HMM_BENCHMARK_CONDITIONING_MS:-0}"
 threads="${BEAGLE_THREADS:-1}"
+benchmark_mode="${TREE_HMM_BENCHMARK_MODE:-full-input-update}"
 resume_report="${TREE_HMM_RESUME_REPORT:-}"
 for value in "${minimum_leaves}" "${repeats}" "${threads}"; do
   if [[ ! "${value}" =~ ^[1-9][0-9]*$ ]]; then
@@ -38,6 +39,13 @@ if [[ "${precision}" != fp32 && "${precision}" != fp64 ]]; then
   echo "PRECISION must be fp32 or fp64" >&2
   exit 2
 fi
+case "${benchmark_mode}" in
+  fixed-model|factor-update|full-input-update) ;;
+  *)
+    echo "TREE_HMM_BENCHMARK_MODE must be fixed-model, factor-update, or full-input-update" >&2
+    exit 2
+    ;;
+esac
 if [[ -n "${resume_report}" && ! -r "${resume_report}" ]]; then
   echo "TREE_HMM_RESUME_REPORT is not readable: ${resume_report}" >&2
   exit 2
@@ -55,12 +63,19 @@ case "${backend}" in
     source "${script_directory}/beagle_environment.sh"
     parallel_phylogenetics_configure_beagle
     target=beagle_benchmark
+    if [[ "${backend}" == beagle-cpu ]]; then
+      resume_threads="${threads}"
+    else
+      resume_threads=1
+    fi
     ;;
   cuda)
     target=cuda_benchmark
+    resume_threads=""
     ;;
   rocm)
     target=rocm_benchmark
+    resume_threads=""
     ;;
   metal)
     if [[ "${precision}" != fp32 ]]; then
@@ -68,6 +83,7 @@ case "${backend}" in
       exit 2
     fi
     target=metal_benchmark
+    resume_threads=""
     ;;
   *)
     echo "unsupported backend ${backend}" >&2
@@ -104,6 +120,7 @@ echo "# corpus_backend=${backend}"
 echo "# manifest=${manifest}"
 echo "# minimum_leaves=${minimum_leaves}"
 echo "# family_limit=${limit}"
+echo "# benchmark_mode=${benchmark_mode}"
 selected=0
 precision_label="$(tr '[:lower:]' '[:upper:]' <<< "${precision}")"
 while IFS=, read -r family leaves raw_sites selected_sites; do
@@ -116,7 +133,8 @@ while IFS=, read -r family leaves raw_sites selected_sites; do
     break
   fi
   if benchmark_resume_dataset_completed "${resume_report}" "${backend}" \
-    "${precision_label}" "${family}"; then
+    "${precision_label}" "${family}" "${benchmark_mode}" \
+    "${resume_threads}"; then
     echo "# resume_skip method=${backend} precision=${precision_label}" \
       "dataset=${family}"
     selected=$((selected + 1))
@@ -127,6 +145,7 @@ while IFS=, read -r family leaves raw_sites selected_sites; do
     --fasta "${families}/${family}.fasta"
     --repeats "${repeats}"
     --conditioning-ms "${conditioning_ms}"
+    --benchmark-mode "${benchmark_mode}"
   )
   case "${backend}" in
     beagle-cpu)

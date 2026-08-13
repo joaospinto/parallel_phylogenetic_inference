@@ -19,12 +19,13 @@ void TimeTask(const char *backend, const char *task, const Options &options,
   const Clock::time_point planning_begin = Clock::now();
   reserve(workspace, model);
   const double workspace_setup_ms = Milliseconds(planning_begin, Clock::now());
-  evaluate(workspace, model);
+  evaluate(workspace, model, InputUpdate::kAll);
+  const InputUpdate update = BenchmarkInputUpdate(options.benchmark_mode);
   std::vector<double> samples;
   samples.reserve(options.repeats);
   for (int repeat = 0; repeat < options.repeats; ++repeat) {
     const Clock::time_point begin = Clock::now();
-    evaluate(workspace, model);
+    evaluate(workspace, model, update);
     samples.push_back(Milliseconds(begin, Clock::now()));
   }
   const btrc::PlanStatistics statistics = btrc::Statistics(problem.plan);
@@ -32,7 +33,8 @@ void TimeTask(const char *backend, const char *task, const Options &options,
                "call; input preparation and device transfers are included\n"
             << "backend,precision,task,dataset,topology,seed_base,seed,replicate,"
                "leaves,nodes,unique_patterns,tree_height,normalized_colless,"
-               "primitive_levels,planning_ms,workspace_setup_ms,repeats,"
+               "primitive_levels,benchmark_mode,planning_ms,"
+               "workspace_setup_ms,repeats,"
                "median_ms,p25_ms,p75_ms,samples_ms\n"
             << std::setprecision(10) << backend << ','
             << tree_hmm::kPrecisionName << ',' << task << ','
@@ -42,7 +44,8 @@ void TimeTask(const char *backend, const char *task, const Options &options,
             << problem.plan.num_nodes() << ',' << problem.sites << ','
             << problem.shape.height << ','
             << problem.shape.normalized_colless << ','
-            << statistics.primitive_levels << ',' << problem.planning_ms << ','
+            << statistics.primitive_levels << ',' << options.benchmark_mode
+            << ',' << problem.planning_ms << ','
             << workspace_setup_ms << ',' << options.repeats << ','
             << Median(samples) << ',' << Quantile(samples, 0.25) << ','
             << Quantile(samples, 0.75) << ',' << JoinSamples(samples) << '\n';
@@ -54,18 +57,20 @@ void RunOne(const char *backend, const Options &options,
   TimeTask(
       backend, "likelihood", options, problem,
       [](auto &workspace, AlignmentModelView model) { workspace.Reserve(model); },
-      [](auto &workspace, AlignmentModelView model) {
+      [](auto &workspace, AlignmentModelView model, InputUpdate update) {
         static_cast<void>(TASK_NAMESPACE::LogLikelihoodsPrepared(model,
-                                                                 workspace));
+                                                                 workspace,
+                                                                 update));
       });
   TimeTask(
       backend, "joint-map", options, problem,
       [](auto &workspace, AlignmentModelView model) {
         workspace.ReserveMaximum(model);
       },
-      [](auto &workspace, AlignmentModelView model) {
+      [](auto &workspace, AlignmentModelView model, InputUpdate update) {
         static_cast<void>(
-            TASK_NAMESPACE::MaximumAPosterioriPrepared(model, workspace));
+            TASK_NAMESPACE::MaximumAPosterioriPrepared(model, workspace,
+                                                       update));
       });
 
   std::vector<Scalar> uniforms(problem.sites * problem.plan.num_nodes(),
@@ -75,18 +80,19 @@ void RunOne(const char *backend, const Options &options,
       [](auto &workspace, AlignmentModelView model) {
         workspace.ReserveSampling(model);
       },
-      [&](auto &workspace, AlignmentModelView model) {
+      [&](auto &workspace, AlignmentModelView model, InputUpdate update) {
         static_cast<void>(TASK_NAMESPACE::PosteriorSamplePrepared(
-            model, std::span<const Scalar>(uniforms), workspace));
+            model, std::span<const Scalar>(uniforms), workspace, update));
       });
   TimeTask(
       backend, "all-marginals", options, problem,
       [](auto &workspace, AlignmentModelView model) {
         workspace.ReserveMarginals(model);
       },
-      [](auto &workspace, AlignmentModelView model) {
+      [](auto &workspace, AlignmentModelView model, InputUpdate update) {
         static_cast<void>(
-            TASK_NAMESPACE::PosteriorMarginalsPrepared(model, workspace));
+            TASK_NAMESPACE::PosteriorMarginalsPrepared(model, workspace,
+                                                       update));
       });
 }
 

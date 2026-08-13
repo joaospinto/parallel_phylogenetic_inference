@@ -17,28 +17,21 @@ void RunOne(const parallel_phylogenetics::benchmark::Options &options,
   const std::size_t site_batch =
       options.site_batch == 0 ? problem.sites
                               : std::min(options.site_batch, problem.sites);
-  tree_hmm::PARALLEL_PHYLOGENETICS_TREE_HMM_NAMESPACE::Workspace
-      full_workspace;
-  full_workspace.ReserveCategorical(problem.plan, 4, site_batch, 16,
-                                    problem.observation_nodes);
-  const BenchmarkResult result =
-      site_batch == problem.sites
-          ? RunInterleaved(
-                model, options.repeats, options.conditioning_ms,
-                full_workspace.CategoricalInputs(),
-                [&](tree_hmm::BatchedCategoricalModelView factors) {
-                  return tree_hmm::PARALLEL_PHYLOGENETICS_TREE_HMM_NAMESPACE::
-                      LogPartitionFunctionPrepared(factors, full_workspace);
-                })
-          : RunChunkedInterleaved(
-                model, options.repeats, options.conditioning_ms, site_batch,
-                full_workspace.CategoricalInputs(),
-                [&](tree_hmm::BatchedCategoricalModelView factors) {
-                  return tree_hmm::PARALLEL_PHYLOGENETICS_TREE_HMM_NAMESPACE::
-                      LogPartitionFunctionPrepared(factors, full_workspace);
-                });
+  PARALLEL_PHYLOGENETICS_ACCELERATOR_NAMESPACE::Workspace full_workspace;
+  PARALLEL_PHYLOGENETICS_ACCELERATOR_NAMESPACE::Workspace tail_workspace;
+  const BenchmarkResult result = RunInterleaved(
+      model, options.repeats, options.conditioning_ms, site_batch,
+      BenchmarkInputUpdate(options.benchmark_mode), full_workspace,
+      tail_workspace,
+      [](auto &workspace, AlignmentModelView view, std::size_t capacity) {
+        workspace.Reserve(view, capacity);
+      },
+      [](AlignmentModelView chunk, auto &workspace, InputUpdate update) {
+        return PARALLEL_PHYLOGENETICS_ACCELERATOR_NAMESPACE::
+            LogLikelihoodsPrepared(chunk, workspace, update);
+      });
   PrintHeader(PARALLEL_PHYLOGENETICS_BACKEND_NAME,
-              tree_hmm::PARALLEL_PHYLOGENETICS_TREE_HMM_NAMESPACE::
+              PARALLEL_PHYLOGENETICS_ACCELERATOR_NAMESPACE::
                   DeviceDescription(),
               options, problem);
   PrintRow(PARALLEL_PHYLOGENETICS_BACKEND_NAME, options, problem, result,
@@ -51,7 +44,7 @@ void RunOne(const parallel_phylogenetics::benchmark::Options &options,
 int main(int argc, char **argv) {
   try {
     using namespace parallel_phylogenetics::benchmark;
-    if (!tree_hmm::PARALLEL_PHYLOGENETICS_TREE_HMM_NAMESPACE::Available()) {
+    if (!PARALLEL_PHYLOGENETICS_ACCELERATOR_NAMESPACE::Available()) {
       std::cerr << "no " PARALLEL_PHYLOGENETICS_GPU_NAME
                    " device is available\n";
       return 2;

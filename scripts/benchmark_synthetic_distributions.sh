@@ -23,6 +23,7 @@ conditioning_ms="${TREE_HMM_BENCHMARK_CONDITIONING_MS:-0}"
 threads="${BEAGLE_THREADS:-1}"
 benchmark_mode="${TREE_HMM_BENCHMARK_MODE:-full-input-update}"
 resume_report="${TREE_HMM_RESUME_REPORT:-}"
+dry_run="${TREE_HMM_DRY_RUN:-0}"
 
 for value in "${replicates}" "${repeats}" "${threads}"; do
   [[ "${value}" =~ ^[1-9][0-9]*$ ]] || {
@@ -53,6 +54,10 @@ if [[ -n "${resume_report}" && ! -r "${resume_report}" ]]; then
   echo "TREE_HMM_RESUME_REPORT is not readable: ${resume_report}" >&2
   exit 2
 fi
+[[ "${dry_run}" == 0 || "${dry_run}" == 1 ]] || {
+  echo "TREE_HMM_DRY_RUN must be 0 or 1" >&2
+  exit 2
+}
 
 case "${method}" in
   cuda|rocm|metal)
@@ -63,14 +68,14 @@ case "${method}" in
   beagle-cpu)
     target=beagle_benchmark
     resource_arguments=(--beagle-resource cpu --beagle-threads "${threads}"
-                        --benchmark-mode "${benchmark_mode}")
+                        )
     resume_threads="${threads}"
     ;;
   beagle-cuda)
     target=beagle_benchmark
     threads=1
     resource_arguments=(--beagle-resource cuda --beagle-threads 1
-                        --benchmark-mode "${benchmark_mode}")
+                        )
     resume_threads=1
     ;;
   *)
@@ -91,6 +96,10 @@ echo "# benchmark_mode=${benchmark_mode}"
 if [[ "${method}" == beagle-* ]]; then
   echo "# beagle_threads=${threads}"
 fi
+total_cases=$((${#topologies[@]} * ${#leaf_counts[@]} * \
+  ${#pattern_counts[@]} * replicates))
+echo "# planned_cases=${total_cases}"
+completed_cases=0
 
 cd "${repository}"
 for topology in "${topologies[@]}"; do
@@ -103,6 +112,11 @@ for topology in "${topologies[@]}"; do
           "${topology}" "${leaves}" "${patterns}" "${seed}" \
           "${replicate}" "${benchmark_mode}" \
           "${resume_threads}"; then
+          completed_cases=$((completed_cases + 1))
+          echo "# progress case=${completed_cases}/${total_cases}" \
+            "status=resume-skip method=${method} precision=${precision_label}" \
+            "topology=${topology} leaves=${leaves}" \
+            "unique_patterns=${patterns} replicate=${replicate}"
           replicate=$((replicate + 1))
           continue
         fi
@@ -117,7 +131,16 @@ for topology in "${topologies[@]}"; do
           replicate=$((replicate + 1))
         done
         run_count=$((replicate - first_missing))
+        completed_cases=$((completed_cases + run_count))
+        echo "# progress cases_through=${completed_cases}/${total_cases}" \
+          "status=benchmark method=${method} precision=${precision_label}" \
+          "topology=${topology} leaves=${leaves}" \
+          "unique_patterns=${patterns} replicate_start=${first_missing}" \
+          "replicates=${run_count}"
         echo "# benchmark_start_grid_cell method=${method} precision=${precision_label} benchmark_mode=${benchmark_mode} threads=${threads} topology=${topology} leaves=${leaves} unique_patterns=${patterns} replicate_start=${first_missing} replicates=${run_count}"
+        if [[ "${dry_run}" == 1 ]]; then
+          continue
+        fi
         command=("bazel-bin/${target}")
         if [[ "${#resource_arguments[@]}" -ne 0 ]]; then
           command+=("${resource_arguments[@]}")
@@ -126,7 +149,8 @@ for topology in "${topologies[@]}"; do
           --topology "${topology}" --leaves "${leaves}" --sites "${patterns}" \
           --seed "${seed}" --replicate-start "${first_missing}" \
           --replicates "${run_count}" --repeats "${repeats}" \
-          --conditioning-ms "${conditioning_ms}"
+          --conditioning-ms "${conditioning_ms}" \
+          --benchmark-mode "${benchmark_mode}"
       done
     done
   done

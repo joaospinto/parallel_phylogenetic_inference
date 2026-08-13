@@ -12,11 +12,25 @@ benchmark_resume_case_completed() {
   local leaves="$6"
   local sites="$7"
   local site_batch="$8"
+  local benchmark_mode="${9:-}"
+  local threads="${10:-}"
   [[ -n "${report}" && -r "${report}" ]] || return 1
   awk -F, -v method="${method}" -v precision="${precision}" \
     -v dataset="${dataset}" -v topology="${topology}" \
     -v leaves="${leaves}" -v sites="${sites}" \
-    -v site_batch="${site_batch}" '
+    -v site_batch="${site_batch}" -v benchmark_mode="${benchmark_mode}" \
+    -v threads="${threads}" '
+      function mode_matches() {
+        if (benchmark_mode == "") return 1
+        if ("benchmark_mode" in column)
+          return $(column["benchmark_mode"]) == benchmark_mode
+        return benchmark_mode == "full-input-update"
+      }
+      function thread_matches() {
+        if (threads == "") return 1
+        if ("threads" in column) return $(column["threads"]) == threads
+        return threads == "1"
+      }
       $1 == "backend" && $2 == "precision" {
         delete column
         for (field_index = 1; field_index <= NF; ++field_index) column[$(field_index)] = field_index
@@ -36,10 +50,13 @@ benchmark_resume_case_completed() {
             $(column["topology"]) == topology &&
             $(column["leaves"]) == leaves &&
             $(column["sites"]) == sites &&
-            $(column["site_batch"]) == site_batch) found = 1
+            $(column["site_batch"]) == site_batch &&
+            mode_matches() && thread_matches()) found = 1
         else if (kind == "" && $1 == method && $2 == precision &&
                  $3 == dataset && $4 == topology && $5 == leaves &&
-                 $7 == sites && $8 == site_batch) found = 1
+                 $7 == sites && $8 == site_batch &&
+                 (benchmark_mode == "" || benchmark_mode == "full-input-update") &&
+                 (threads == "" || threads == "1")) found = 1
         next
       }
       {
@@ -50,10 +67,13 @@ benchmark_resume_case_completed() {
             $(column["dataset"]) == dataset &&
             $(column["topology"]) == topology &&
             $(column["leaves"]) == leaves && $(column["sites"]) == sites &&
-            $(column["site_batch"]) == site_batch) found = 1
+            $(column["site_batch"]) == site_batch &&
+            mode_matches() && thread_matches()) found = 1
         else if (kind == "" && $1 == "beagle" && $2 == resource &&
                  $3 == precision && $4 == dataset && $5 == topology &&
-                 $6 == leaves && $8 == sites && $9 == site_batch) found = 1
+                 $6 == leaves && $8 == sites && $9 == site_batch &&
+                 (benchmark_mode == "" || benchmark_mode == "full-input-update") &&
+                 (threads == "" || threads == "1")) found = 1
       }
       END { exit !found }
     ' "${report}"
@@ -76,6 +96,17 @@ benchmark_resume_synthetic_replicate_completed() {
     -v patterns="${patterns}" -v seed_base="${seed_base}" \
     -v replicate="${replicate}" -v benchmark_mode="${benchmark_mode}" \
     -v threads="${threads}" '
+      function mode_matches() {
+        if (benchmark_mode == "") return 1
+        if ("benchmark_mode" in column)
+          return $(column["benchmark_mode"]) == benchmark_mode
+        return benchmark_mode == "full-input-update"
+      }
+      function thread_matches() {
+        if (threads == "") return 1
+        if ("threads" in column) return $(column["threads"]) == threads
+        return threads == "1"
+      }
       $1 == "backend" && $2 == "precision" {
         delete column
         for (field_index = 1; field_index <= NF; ++field_index) column[$(field_index)] = field_index
@@ -102,10 +133,7 @@ benchmark_resume_synthetic_replicate_completed() {
             $(column["unique_patterns"]) == patterns &&
             $(column["seed_base"]) == seed_base &&
             $(column["replicate"]) == replicate &&
-            (benchmark_mode == "" || !("benchmark_mode" in column) ||
-             $(column["benchmark_mode"]) == benchmark_mode) &&
-            (threads == "" || !("threads" in column) ||
-             $(column["threads"]) == threads)) found = 1
+            mode_matches() && thread_matches()) found = 1
       }
       END { exit !found }
     ' "${report}"
@@ -117,9 +145,23 @@ benchmark_resume_dataset_batch_completed() {
   local precision="$3"
   local dataset="$4"
   local site_batch="$5"
+  local benchmark_mode="${6:-}"
+  local threads="${7:-}"
   [[ -n "${report}" && -r "${report}" ]] || return 1
   awk -F, -v method="${method}" -v precision="${precision}" \
-    -v dataset="${dataset}" -v site_batch="${site_batch}" '
+    -v dataset="${dataset}" -v site_batch="${site_batch}" \
+    -v benchmark_mode="${benchmark_mode}" -v threads="${threads}" '
+      function mode_matches() {
+        if (benchmark_mode == "") return 1
+        if ("benchmark_mode" in column)
+          return $(column["benchmark_mode"]) == benchmark_mode
+        return benchmark_mode == "full-input-update"
+      }
+      function thread_matches() {
+        if (threads == "") return 1
+        if ("threads" in column) return $(column["threads"]) == threads
+        return threads == "1"
+      }
       $1 == "backend" && $2 == "precision" {
         delete column
         for (field_index = 1; field_index <= NF; ++field_index) column[$(field_index)] = field_index
@@ -136,9 +178,11 @@ benchmark_resume_dataset_batch_completed() {
         if (kind == "native" && $(column["backend"]) == method &&
             $(column["precision"]) == precision &&
             $(column["dataset"]) == dataset &&
-            $(column["site_batch"]) == site_batch) found = 1
+            $(column["site_batch"]) == site_batch &&
+            mode_matches()) found = 1
         else if (kind == "" && $1 == method && $2 == precision &&
-                 $3 == dataset && $8 == site_batch) found = 1
+                 $3 == dataset && $8 == site_batch &&
+                 (benchmark_mode == "" || benchmark_mode == "full-input-update")) found = 1
         next
       }
       {
@@ -147,9 +191,12 @@ benchmark_resume_dataset_batch_completed() {
             $(column["beagle_resource"]) == resource &&
             $(column["precision"]) == precision &&
             $(column["dataset"]) == dataset &&
-            $(column["site_batch"]) == site_batch) found = 1
+            $(column["site_batch"]) == site_batch &&
+            mode_matches() && thread_matches()) found = 1
         else if (kind == "" && $1 == "beagle" && $2 == resource &&
-                 $3 == precision && $4 == dataset && $9 == site_batch) found = 1
+                 $3 == precision && $4 == dataset && $9 == site_batch &&
+                 (benchmark_mode == "" || benchmark_mode == "full-input-update") &&
+                 (threads == "" || threads == "1")) found = 1
       }
       END { exit !found }
     ' "${report}"
@@ -166,6 +213,17 @@ benchmark_resume_dataset_completed() {
   awk -F, -v method="${method}" -v precision="${precision}" \
     -v dataset="${dataset}" -v benchmark_mode="${benchmark_mode}" \
     -v threads="${threads}" '
+      function mode_matches() {
+        if (benchmark_mode == "") return 1
+        if ("benchmark_mode" in column)
+          return $(column["benchmark_mode"]) == benchmark_mode
+        return benchmark_mode == "full-input-update"
+      }
+      function thread_matches() {
+        if (threads == "") return 1
+        if ("threads" in column) return $(column["threads"]) == threads
+        return threads == "1"
+      }
       $1 == "backend" && $2 == "precision" {
         delete column
         for (field_index = 1; field_index <= NF; ++field_index) column[$(field_index)] = field_index
@@ -181,9 +239,11 @@ benchmark_resume_dataset_completed() {
       method == "cuda" || method == "rocm" || method == "metal" {
         if (kind == "native" && $(column["backend"]) == method &&
             $(column["precision"]) == precision &&
-            $(column["dataset"]) == dataset) found = 1
+            $(column["dataset"]) == dataset &&
+            mode_matches()) found = 1
         else if (kind == "" && $1 == method && $2 == precision &&
-                 $3 == dataset) found = 1
+                 $3 == dataset &&
+                 (benchmark_mode == "" || benchmark_mode == "full-input-update")) found = 1
         next
       }
       {
@@ -192,12 +252,11 @@ benchmark_resume_dataset_completed() {
             $(column["beagle_resource"]) == resource &&
             $(column["precision"]) == precision &&
             $(column["dataset"]) == dataset &&
-            (benchmark_mode == "" || !("benchmark_mode" in column) ||
-             $(column["benchmark_mode"]) == benchmark_mode) &&
-            (threads == "" || !("threads" in column) ||
-             $(column["threads"]) == threads)) found = 1
+            mode_matches() && thread_matches()) found = 1
         else if (kind == "" && $1 == "beagle" && $2 == resource &&
-                 $3 == precision && $4 == dataset) found = 1
+                 $3 == precision && $4 == dataset &&
+                 (benchmark_mode == "" || benchmark_mode == "full-input-update") &&
+                 (threads == "" || threads == "1")) found = 1
       }
       END { exit !found }
     ' "${report}"
@@ -208,12 +267,34 @@ benchmark_resume_capacity_reached() {
   local method="$2"
   local precision="$3"
   local site_batch="$4"
+  local dataset="${5:-unknown}"
+  local benchmark_mode="${6:-full-input-update}"
+  local threads="${7:-none}"
   [[ -n "${report}" && -r "${report}" ]] || return 1
-  awk -v prefix="# capacity_limit method=${method} precision=${precision} first_infeasible_site_batch=" \
-    -v candidate="${site_batch}" '
-      index($0, prefix) == 1 {
-        boundary = substr($0, length(prefix) + 1)
-        if (boundary ~ /^[0-9]+$/ && boundary <= candidate) found = 1
+  awk -v method="${method}" -v precision="${precision}" \
+    -v dataset="${dataset}" -v benchmark_mode="${benchmark_mode}" \
+    -v threads="${threads}" -v candidate="${site_batch}" '
+      $1 == "#" && $2 == "capacity_limit" {
+        delete value
+        for (field_index = 3; field_index <= NF; ++field_index) {
+          split($(field_index), part, "=")
+          value[part[1]] = part[2]
+        }
+        legacy = !("dataset" in value)
+        metadata_matches = 0
+        if (legacy) {
+          metadata_matches = dataset == "unknown" &&
+                             benchmark_mode == "full-input-update" &&
+                             threads == "none"
+        } else {
+          metadata_matches = value["dataset"] == dataset &&
+                             value["benchmark_mode"] == benchmark_mode &&
+                             value["threads"] == threads
+        }
+        if (value["method"] == method && value["precision"] == precision &&
+            metadata_matches &&
+            value["first_infeasible_site_batch"] ~ /^[0-9]+$/ &&
+            value["first_infeasible_site_batch"] <= candidate) found = 1
       }
       END { exit !found }
     ' "${report}"
