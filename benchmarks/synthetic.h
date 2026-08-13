@@ -114,7 +114,6 @@ inline SyntheticTopology MakeGrowthTopology(std::string_view topology,
       const std::size_t chosen = static_cast<std::size_t>(
           random.Next() % current_leaves.size());
       child = current_leaves[chosen];
-      current_leaves[chosen] = next + 1;
     } else if (topology == "uniform") {
       child = static_cast<btrc::Index>(
           random.Next() % static_cast<std::uint64_t>(2 * count - 1));
@@ -129,6 +128,7 @@ inline SyntheticTopology MakeGrowthTopology(std::string_view topology,
     result.parents[leaf] = parent;
     current_leaves.push_back(leaf);
   }
+  std::sort(current_leaves.begin(), current_leaves.end());
   result.leaves = std::move(current_leaves);
   return result;
 }

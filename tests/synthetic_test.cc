@@ -29,8 +29,22 @@ int main() {
         MakeSyntheticTopology(topology, kLeaves, 7);
     Check(first.parents == second.parents);
     Check(first.leaves == second.leaves);
+    Check(std::is_sorted(first.leaves.begin(), first.leaves.end()));
+    Check(std::adjacent_find(first.leaves.begin(), first.leaves.end()) ==
+          first.leaves.end());
     Check(first.parents.size() == 2 * kLeaves - 1);
     Check(first.leaves.size() == kLeaves);
+    std::vector<std::size_t> child_counts(first.parents.size());
+    for (const std::int64_t parent : first.parents) {
+      if (parent >= 0)
+        ++child_counts[static_cast<std::size_t>(parent)];
+    }
+    std::vector<btrc::Index> actual_leaves;
+    for (std::size_t node = 0; node < child_counts.size(); ++node) {
+      if (child_counts[node] == 0)
+        actual_leaves.push_back(static_cast<btrc::Index>(node));
+    }
+    Check(first.leaves == actual_leaves);
     const btrc::Plan plan = btrc::MakePlan(first.parents);
     const TreeShapeStatistics shape = ShapeStatistics(plan);
     Check(shape.binary);
