@@ -276,6 +276,7 @@ cc_library(
     name = "parallel_phylogenetics_metal",
     srcs = [
         "src/accelerator_internal.h",
+        "src/gpu_backend_impl.inc",
         "src/metal.cc",
     ],
     hdrs = ["include/parallel_phylogenetics/metal.h"],

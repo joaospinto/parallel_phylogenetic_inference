@@ -1,3 +1,25 @@
+#if !defined(PARALLEL_PHYLOGENETICS_GPU_NAMESPACE) ||                          \
+    !defined(PARALLEL_PHYLOGENETICS_TREE_HMM_NAMESPACE) ||                     \
+    !defined(PARALLEL_PHYLOGENETICS_GPU_NAME) ||                               \
+    !defined(PARALLEL_PHYLOGENETICS_GPU_HAS_DEVICE_SELECTION)
+#error "gpu_backend_impl.inc requires a complete backend wrapper"
+#endif
+
+// CUDA and ROCm accept an explicit device index, whereas Metal exposes the
+// process-selected device. This is the only application-layer API difference;
+// all reservation and prepared-inference forwarding remains shared below.
+#if PARALLEL_PHYLOGENETICS_GPU_HAS_DEVICE_SELECTION
+#define PARALLEL_PHYLOGENETICS_DEVICE_PARAMETER int device
+#define PARALLEL_PHYLOGENETICS_DEVICE_ARGUMENT device
+#define PARALLEL_PHYLOGENETICS_BACKEND_PARAMETERS(...) __VA_ARGS__, int device
+#define PARALLEL_PHYLOGENETICS_BACKEND_ARGUMENTS(...) __VA_ARGS__, device
+#else
+#define PARALLEL_PHYLOGENETICS_DEVICE_PARAMETER
+#define PARALLEL_PHYLOGENETICS_DEVICE_ARGUMENT
+#define PARALLEL_PHYLOGENETICS_BACKEND_PARAMETERS(...) __VA_ARGS__
+#define PARALLEL_PHYLOGENETICS_BACKEND_ARGUMENTS(...) __VA_ARGS__
+#endif
+
 #include <stdexcept>
 #include <utility>
 
@@ -17,52 +39,56 @@ bool Available() {
   return tree_hmm::PARALLEL_PHYLOGENETICS_TREE_HMM_NAMESPACE::Available();
 }
 
-std::string DeviceDescription(int device) {
+std::string DeviceDescription(PARALLEL_PHYLOGENETICS_DEVICE_PARAMETER) {
   return tree_hmm::PARALLEL_PHYLOGENETICS_TREE_HMM_NAMESPACE::DeviceDescription(
-      device);
+      PARALLEL_PHYLOGENETICS_DEVICE_ARGUMENT);
 }
 
-void Workspace::Reserve(AlignmentModelView model,
-                        std::size_t site_batch_capacity, int device) {
+void Workspace::Reserve(PARALLEL_PHYLOGENETICS_BACKEND_PARAMETERS(
+    AlignmentModelView model, std::size_t site_batch_capacity)) {
   Impl &storage = *impl_;
   internal::ReserveOperation(
       storage, model, site_batch_capacity,
       internal::PreparedOperation::kLikelihood, [&](std::size_t batch) {
-        storage.tree_hmm.ReserveCategorical(model.plan, 4, batch, 16,
-                                            model.observation_nodes, device);
+        storage.tree_hmm.ReserveCategorical(
+            PARALLEL_PHYLOGENETICS_BACKEND_ARGUMENTS(model.plan, 4, batch, 16,
+                                                     model.observation_nodes));
       });
 }
 
-void Workspace::ReserveMaximum(AlignmentModelView model,
-                               std::size_t site_batch_capacity, int device) {
+void Workspace::ReserveMaximum(PARALLEL_PHYLOGENETICS_BACKEND_PARAMETERS(
+    AlignmentModelView model, std::size_t site_batch_capacity)) {
   Impl &storage = *impl_;
   internal::ReserveOperation(
       storage, model, site_batch_capacity,
       internal::PreparedOperation::kMaximum, [&](std::size_t batch) {
         storage.tree_hmm.ReserveCategoricalMaximum(
-            model.plan, 4, batch, 16, model.observation_nodes, device);
+            PARALLEL_PHYLOGENETICS_BACKEND_ARGUMENTS(model.plan, 4, batch, 16,
+                                                     model.observation_nodes));
       });
 }
 
-void Workspace::ReserveSampling(AlignmentModelView model,
-                                std::size_t site_batch_capacity, int device) {
+void Workspace::ReserveSampling(PARALLEL_PHYLOGENETICS_BACKEND_PARAMETERS(
+    AlignmentModelView model, std::size_t site_batch_capacity)) {
   Impl &storage = *impl_;
   internal::ReserveOperation(
       storage, model, site_batch_capacity,
       internal::PreparedOperation::kSampling, [&](std::size_t batch) {
         storage.tree_hmm.ReserveCategoricalSampling(
-            model.plan, 4, batch, 16, model.observation_nodes, device);
+            PARALLEL_PHYLOGENETICS_BACKEND_ARGUMENTS(model.plan, 4, batch, 16,
+                                                     model.observation_nodes));
       });
 }
 
-void Workspace::ReserveMarginals(AlignmentModelView model,
-                                 std::size_t site_batch_capacity, int device) {
+void Workspace::ReserveMarginals(PARALLEL_PHYLOGENETICS_BACKEND_PARAMETERS(
+    AlignmentModelView model, std::size_t site_batch_capacity)) {
   Impl &storage = *impl_;
   internal::ReserveOperation(
       storage, model, site_batch_capacity,
       internal::PreparedOperation::kMarginals, [&](std::size_t batch) {
         storage.tree_hmm.ReserveCategoricalMarginals(
-            model.plan, 4, batch, 16, model.observation_nodes, device);
+            PARALLEL_PHYLOGENETICS_BACKEND_ARGUMENTS(model.plan, 4, batch, 16,
+                                                     model.observation_nodes));
       });
 }
 
@@ -111,8 +137,7 @@ AlignmentMaximumView MaximumAPosterioriPrepared(AlignmentModelView model,
       [&](tree_hmm::BatchedCategoricalModelView factors,
           InputUpdate batch_update) {
         return tree_hmm::PARALLEL_PHYLOGENETICS_TREE_HMM_NAMESPACE::
-            MaximumAPosterioriPrepared(factors, storage.tree_hmm,
-                                       batch_update);
+            MaximumAPosterioriPrepared(factors, storage.tree_hmm, batch_update);
       },
       update, storage.timings);
 }
@@ -121,14 +146,13 @@ AlignmentPosteriorSampleView
 PosteriorSamplePrepared(AlignmentModelView model,
                         std::span<const Scalar> uniforms,
                         Workspace &workspace) {
-  return PosteriorSamplePrepared(model, uniforms, workspace,
-                                 InputUpdate::kAll);
+  return PosteriorSamplePrepared(model, uniforms, workspace, InputUpdate::kAll);
 }
 
 AlignmentPosteriorSampleView
 PosteriorSamplePrepared(AlignmentModelView model,
-                        std::span<const Scalar> uniforms,
-                        Workspace &workspace, InputUpdate update) {
+                        std::span<const Scalar> uniforms, Workspace &workspace,
+                        InputUpdate update) {
   Workspace::Impl &storage = *workspace.impl_;
   internal::ValidatePrepared(model, storage,
                              internal::PreparedOperation::kSampling);
@@ -160,10 +184,14 @@ AlignmentPosteriorView PosteriorMarginalsPrepared(AlignmentModelView model,
       [&](tree_hmm::BatchedCategoricalModelView factors,
           InputUpdate batch_update) {
         return tree_hmm::PARALLEL_PHYLOGENETICS_TREE_HMM_NAMESPACE::
-            PosteriorMarginalsPrepared(factors, storage.tree_hmm,
-                                       batch_update);
+            PosteriorMarginalsPrepared(factors, storage.tree_hmm, batch_update);
       },
       update, storage.timings);
 }
 
 } // namespace parallel_phylogenetics::PARALLEL_PHYLOGENETICS_GPU_NAMESPACE
+
+#undef PARALLEL_PHYLOGENETICS_BACKEND_ARGUMENTS
+#undef PARALLEL_PHYLOGENETICS_BACKEND_PARAMETERS
+#undef PARALLEL_PHYLOGENETICS_DEVICE_ARGUMENT
+#undef PARALLEL_PHYLOGENETICS_DEVICE_PARAMETER
