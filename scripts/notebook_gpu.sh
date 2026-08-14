@@ -249,7 +249,7 @@ initialize_interleaved_methods() {
   local resource
   local threads
   local -a resource_threads
-  for resource in "${beagle_resources[@]}"; do
+  for resource in "${precision_beagle_resources[@]}"; do
     if [[ "${resource}" == cpu ]]; then
       resource_threads=("${beagle_cpu_thread_counts[@]}")
     else
@@ -372,6 +372,7 @@ if benchmark_section_enabled pandit &&
     --min-leaves "${PANDIT_MIN_LEAVES:-100}"
 fi
 
+beagle_benchmarks_enabled=0
 if [[ "${TREE_HMM_SKIP_BENCHMARKS:-0}" != "1" &&
       "${TREE_HMM_SKIP_BEAGLE:-0}" != "1" ]] &&
    { section_selected synthetic || section_selected distributions ||
@@ -379,22 +380,63 @@ if [[ "${TREE_HMM_SKIP_BENCHMARKS:-0}" != "1" &&
      section_selected empirical ||
      section_selected fish ||
      section_selected pandit; }; then
-  beagle_build_backend=cpu
+  beagle_fp64_prefix=""
+  beagle_fp32_prefix=""
+  fp64_requested=0
+  fp32_requested=0
+  for selected_precision in "${precisions[@]}"; do
+    if [[ "${selected_precision}" == FP64 ]]; then
+      fp64_requested=1
+    else
+      fp32_requested=1
+    fi
+  done
   if [[ "${accelerator_backend}" == cuda ]]; then
-    beagle_build_backend=cuda
+    if [[ "${fp64_requested}" == 1 ]]; then
+      beagle_fp64_prefix="${notebook_work_dir}/beagle-4.1.0-pre-release-cuda"
+      BEAGLE_BUILD_BACKEND=cuda \
+        bash "${repo_dir}/scripts/install_beagle.sh" "${beagle_fp64_prefix}"
+      echo "=== BEAGLE FP64 source and build identity ==="
+      cat "${beagle_fp64_prefix}/BEAGLE_BUILD_METADATA.txt"
+    fi
+    if [[ "${fp32_requested}" == 1 ]]; then
+      beagle_fp32_prefix="${notebook_work_dir}/beagle-4.0.1-cuda"
+      BEAGLE_VERSION_LABEL=4.0.1 \
+        BEAGLE_SOURCE_REVISION=bf35ad4a28e5f03edaa10dfd77c1b54eee0d9595 \
+        BEAGLE_SOURCE_URL=https://github.com/beagle-dev/beagle-lib/archive/refs/tags/v4.0.1.tar.gz \
+        BEAGLE_SOURCE_SHA256=9d258cd9bedd86d7c28b91587acd1132f4e01d4f095c657ad4dc93bd83d4f120 \
+        BEAGLE_CUDA_SUPPORTED_PRECISIONS="FP64 FP32" \
+        BEAGLE_BUILD_BACKEND=cuda \
+        bash "${repo_dir}/scripts/install_beagle.sh" "${beagle_fp32_prefix}"
+      echo "=== BEAGLE FP32 source and build identity ==="
+      cat "${beagle_fp32_prefix}/BEAGLE_BUILD_METADATA.txt"
+    fi
+  else
+    beagle_cpu_prefix="${notebook_work_dir}/beagle-4.1.0-pre-release-cpu"
+    BEAGLE_BUILD_BACKEND=cpu \
+      bash "${repo_dir}/scripts/install_beagle.sh" "${beagle_cpu_prefix}"
+    echo "=== BEAGLE source and build identity ==="
+    cat "${beagle_cpu_prefix}/BEAGLE_BUILD_METADATA.txt"
+    beagle_fp64_prefix="${beagle_cpu_prefix}"
+    beagle_fp32_prefix="${beagle_cpu_prefix}"
   fi
-  beagle_prefix="${notebook_work_dir}/beagle-4.1.0-pre-release-${beagle_build_backend}"
-  BEAGLE_BUILD_BACKEND="${beagle_build_backend}" \
-    bash "${repo_dir}/scripts/install_beagle.sh" "${beagle_prefix}"
-  echo "=== BEAGLE source and build identity ==="
-  cat "${beagle_prefix}/BEAGLE_BUILD_METADATA.txt"
-  export BEAGLE_PREFIX="${beagle_prefix}"
-  # shellcheck source=scripts/beagle_environment.sh
-  source "${repo_dir}/scripts/beagle_environment.sh"
-  parallel_phylogenetics_configure_beagle
+  beagle_benchmarks_enabled=1
 fi
 
 for precision in "${precisions[@]}"; do
+  precision_beagle_resources=("${beagle_resources[@]}")
+  if [[ "${beagle_benchmarks_enabled}" == 1 ]]; then
+    if [[ "${precision}" == FP32 ]]; then
+      export BEAGLE_PREFIX="${beagle_fp32_prefix}"
+    else
+      export BEAGLE_PREFIX="${beagle_fp64_prefix}"
+    fi
+    # shellcheck source=scripts/beagle_environment.sh
+    source "${repo_dir}/scripts/beagle_environment.sh"
+    parallel_phylogenetics_configure_beagle
+    echo "# beagle_baseline precision=${precision}" \
+      "prefix=${BEAGLE_PREFIX}"
+  fi
   precision_config="$(tr '[:upper:]' '[:lower:]' <<< "${precision}")"
   precision_args=("--config=${precision_config}")
   validation_completed=0
@@ -501,7 +543,7 @@ for precision in "${precisions[@]}"; do
       echo "=== ${precision} BEAGLE comparison ==="
       "${bazel_command}" build "${precision_args[@]}" //:beagle_benchmark
       for benchmark_mode in "${synthetic_benchmark_modes[@]}"; do
-        for resource in "${beagle_resources[@]}"; do
+        for resource in "${precision_beagle_resources[@]}"; do
           if [[ "${resource}" == cpu ]]; then
             resource_threads=("${beagle_cpu_thread_counts[@]}")
           else
@@ -716,7 +758,7 @@ for precision in "${precisions[@]}"; do
     done
     if [[ "${TREE_HMM_SKIP_BEAGLE:-0}" != "1" ]]; then
       echo "=== ${precision} Fish Tree of Life BEAGLE comparison ==="
-      for resource in "${beagle_resources[@]}"; do
+      for resource in "${precision_beagle_resources[@]}"; do
         method="beagle-${resource}"
         if [[ "${resource}" == cpu ]]; then
           resource_threads=("${beagle_cpu_thread_counts[@]}")
@@ -788,10 +830,10 @@ for precision in "${precisions[@]}"; do
         "${accelerator_backend}" \
         "${pandit_dir}/families"
     if [[ "${TREE_HMM_SKIP_BEAGLE:-0}" != "1" ]]; then
-      beagle_pandit_resources=(beagle-cpu)
-      if [[ "${accelerator_backend}" == cuda ]]; then
-        beagle_pandit_resources+=(beagle-cuda)
-      fi
+      beagle_pandit_resources=()
+      for resource in "${precision_beagle_resources[@]}"; do
+        beagle_pandit_resources+=("beagle-${resource}")
+      done
       for resource in "${beagle_pandit_resources[@]}"; do
         if [[ "${resource}" == beagle-cpu ]]; then
           resource_threads=("${beagle_cpu_thread_counts[@]}")

@@ -704,6 +704,39 @@ fi
 launcher_root="${work_directory}/launcher"
 source_root="${launcher_root}/input/sources"
 working_root="${launcher_root}/working"
+mkdir -p "${launcher_root}"
+render_fixture="${launcher_root}/render-fixture.txt"
+cat > "${render_fixture}" <<'EOF'
+unstructured build noise
+=== FP32 phase ===
+# progress case=1/100 method=cuda precision=FP32 dataset=fixture
+# progress case=2/100 method=cuda precision=FP32 dataset=fixture
+# progress case=10/100 method=cuda precision=FP32 dataset=fixture
+backend,precision,max_abs_error
+cuda,FP32,0
+Critical error: fixture failure
+# benchmark_section_complete section=fixture backend=cuda precision=FP32
+EOF
+python3 "${root}/scripts/render_notebook_output.py" --level compact \
+  < "${render_fixture}" > "${launcher_root}/render-compact.txt"
+grep -Fq '=== FP32 phase ===' "${launcher_root}/render-compact.txt"
+grep -Fq '# progress case=1/100' "${launcher_root}/render-compact.txt"
+grep -Fq '# progress case=10/100' "${launcher_root}/render-compact.txt"
+! grep -Fq '# progress case=2/100' "${launcher_root}/render-compact.txt"
+! grep -Fq 'cuda,FP32,0' "${launcher_root}/render-compact.txt"
+grep -Fq 'Critical error: fixture failure' \
+  "${launcher_root}/render-compact.txt"
+grep -Fq '# benchmark_section_complete section=fixture' \
+  "${launcher_root}/render-compact.txt"
+python3 "${root}/scripts/render_notebook_output.py" --level full \
+  < "${render_fixture}" > "${launcher_root}/render-full.txt"
+cmp "${render_fixture}" "${launcher_root}/render-full.txt"
+python3 "${root}/scripts/render_notebook_output.py" --level quiet \
+  < "${render_fixture}" > "${launcher_root}/render-quiet.txt"
+! grep -Fq '=== FP32 phase ===' "${launcher_root}/render-quiet.txt"
+grep -Fq 'Critical error: fixture failure' "${launcher_root}/render-quiet.txt"
+grep -Fq '# benchmark_section_complete section=fixture' \
+  "${launcher_root}/render-quiet.txt"
 mkdir -p "${source_root}/parallel_phylogenetic_inference/scripts" \
   "${source_root}/parallel_tree_hmm" \
   "${source_root}/bidirectional_tree_rake_compress" "${working_root}"
@@ -714,6 +747,8 @@ cp "${root}/scripts/kaggle_accelerator_notebook.sh" \
 cp "${root}/scripts/accelerator_environment.sh" \
   "${source_root}/parallel_phylogenetic_inference/scripts/"
 cp "${root}/scripts/verify_benchmark_correctness.py" \
+  "${source_root}/parallel_phylogenetic_inference/scripts/"
+cp "${root}/scripts/render_notebook_output.py" \
   "${source_root}/parallel_phylogenetic_inference/scripts/"
 printf '9.1.1\n' > \
   "${source_root}/parallel_phylogenetic_inference/.bazelversion"
@@ -750,6 +785,10 @@ BEAGLE_BUILD_JOBS=1 \
 grep -Fq '# correctness_gate_complete benchmark_rows=0 task_rows=0' \
   "${working_root}/parallel_phylogenetics_cuda_report.txt"
 grep -Fq '# benchmark_suite_complete backend=cuda' \
+  "${working_root}/parallel_phylogenetics_cuda_report.txt"
+grep -Fq 'notebook output level: compact' "${launcher_root}/seed.log"
+! grep -Fq 'stub precision=FP32' "${launcher_root}/seed.log"
+grep -Fq 'stub precision=FP32' \
   "${working_root}/parallel_phylogenetics_cuda_report.txt"
 printf 'previous-row\n' >> \
   "${working_root}/parallel_phylogenetics_cuda_report.txt"
@@ -861,6 +900,10 @@ if TREE_HMM_NOTEBOOK_INPUT_DIR="${launcher_root}/input" \
 fi
 ! grep -Fq '# benchmark_suite_complete' \
   "${failure_working}/parallel_phylogenetics_cuda_report.txt"
+grep -Fq '# benchmark_suite_failed backend=cuda exit_code=42' \
+  "${failure_working}/parallel_phylogenetics_cuda_report.txt"
+grep -Fq '# benchmark_suite_failed backend=cuda exit_code=42' \
+  "${launcher_root}/failure.log"
 TREE_HMM_NOTEBOOK_INPUT_DIR="${launcher_root}/input" \
 TREE_HMM_NOTEBOOK_WORKING_DIR="${working_root}" \
 TREE_HMM_ACCELERATOR_BACKEND_OVERRIDE=rocm \

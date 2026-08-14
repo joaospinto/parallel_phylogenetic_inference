@@ -3,6 +3,14 @@ set -euo pipefail
 
 notebook_input_dir="${TREE_HMM_NOTEBOOK_INPUT_DIR:-/kaggle/input}"
 notebook_working_dir="${TREE_HMM_NOTEBOOK_WORKING_DIR:-/kaggle/working}"
+notebook_log_level="${TREE_HMM_NOTEBOOK_LOG_LEVEL:-compact}"
+case "${notebook_log_level}" in
+  quiet|compact|full) ;;
+  *)
+    echo "TREE_HMM_NOTEBOOK_LOG_LEVEL must be quiet, compact, or full" >&2
+    exit 2
+    ;;
+esac
 
 sha256_stream() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -308,6 +316,12 @@ cache_identity="$(
     echo "beagle-cmake-build-jni=OFF"
     echo "beagle-cmake-build-openmp=OFF"
     echo "beagle-cmake-build-bit=OFF"
+    echo "beagle-fp64-cuda-supported-precisions=FP64"
+    echo "beagle-fp32-version-label=4.0.1"
+    echo "beagle-fp32-source-revision=bf35ad4a28e5f03edaa10dfd77c1b54eee0d9595"
+    echo "beagle-fp32-source-url=https://github.com/beagle-dev/beagle-lib/archive/refs/tags/v4.0.1.tar.gz"
+    echo "beagle-fp32-source-sha256=9d258cd9bedd86d7c28b91587acd1132f4e01d4f095c657ad4dc93bd83d4f120"
+    echo "beagle-fp32-cuda-supported-precisions=FP64 FP32"
     echo "beagle-cpu-threads=${TREE_HMM_BEAGLE_CPU_THREADS:-1 ${logical_core_count}}"
     echo "fish-minimum-site-batch=${TREE_HMM_FISH_MINIMUM_SITE_BATCH:-256}"
     echo "host-memory-guard-percent=${TREE_HMM_HOST_MEMORY_GUARD_PERCENT:-75}"
@@ -399,14 +413,54 @@ for section in "${requested_verification_sections[@]}"; do
 done
 printf '# benchmark_suite_start backend=%s cache_identity_sha256=%s\n' \
   "${accelerator_backend}" "${cache_identity}" | tee -a "${report}"
+echo "notebook output level: ${notebook_log_level}; complete report: ${report}"
+set +e
 TREE_HMM_PRECISIONS="${TREE_HMM_PRECISIONS_OVERRIDE:-FP64 FP32}" \
   TREE_HMM_RESUME_REPORT="${report}" \
   TREE_HMM_BENCHMARK_REPEATS="${TREE_HMM_BENCHMARK_REPEATS:-15}" \
   TREE_HMM_EMPIRICAL_REPEATS="${TREE_HMM_EMPIRICAL_REPEATS:-3}" \
-  bash "scripts/notebook_${accelerator_backend}.sh" 2>&1 | tee -a "${report}"
+  bash "scripts/notebook_${accelerator_backend}.sh" 2>&1 | \
+  tee -a "${report}" | \
+  python3 -u scripts/render_notebook_output.py --level "${notebook_log_level}"
+notebook_pipeline_status=("${PIPESTATUS[@]}")
+set -e
+if [[ "${notebook_pipeline_status[0]}" != 0 ||
+      "${notebook_pipeline_status[1]}" != 0 ||
+      "${notebook_pipeline_status[2]}" != 0 ]]; then
+  notebook_exit_code=0
+  for status in "${notebook_pipeline_status[@]}"; do
+    if [[ "${status}" != 0 ]]; then
+      notebook_exit_code="${status}"
+      break
+    fi
+  done
+  printf '# benchmark_suite_failed backend=%s exit_code=%s report=%s\n' \
+    "${accelerator_backend}" "${notebook_exit_code}" "${report}" | \
+    tee -a "${report}"
+  exit "${notebook_exit_code}"
+fi
+set +e
 python3 scripts/verify_benchmark_correctness.py "${report}" \
   --selected-sections "${effective_verification_sections[*]-}" \
-  --selected-precisions "${TREE_HMM_PRECISIONS_OVERRIDE:-FP64 FP32}" | \
-  tee -a "${report}"
+  --selected-precisions "${TREE_HMM_PRECISIONS_OVERRIDE:-FP64 FP32}" 2>&1 | \
+  tee -a "${report}" | \
+  python3 -u scripts/render_notebook_output.py --level "${notebook_log_level}"
+verification_pipeline_status=("${PIPESTATUS[@]}")
+set -e
+if [[ "${verification_pipeline_status[0]}" != 0 ||
+      "${verification_pipeline_status[1]}" != 0 ||
+      "${verification_pipeline_status[2]}" != 0 ]]; then
+  verification_exit_code=0
+  for status in "${verification_pipeline_status[@]}"; do
+    if [[ "${status}" != 0 ]]; then
+      verification_exit_code="${status}"
+      break
+    fi
+  done
+  printf '# benchmark_suite_failed backend=%s exit_code=%s report=%s\n' \
+    "${accelerator_backend}" "${verification_exit_code}" "${report}" | \
+    tee -a "${report}"
+  exit "${verification_exit_code}"
+fi
 printf '# benchmark_suite_complete backend=%s cache_identity_sha256=%s\n' \
   "${accelerator_backend}" "${cache_identity}" | tee -a "${report}"

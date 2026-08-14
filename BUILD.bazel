@@ -20,6 +20,7 @@ sh_test(
         "scripts/kaggle_accelerator_notebook.sh",
         "scripts/kaggle_cuda_notebook.sh",
         "scripts/plot_synthetic_study.py",
+        "scripts/render_notebook_output.py",
         "scripts/summarize_benchmarks.py",
         "scripts/validate_interleaved_schedule.py",
         "scripts/verify_benchmark_correctness.py",

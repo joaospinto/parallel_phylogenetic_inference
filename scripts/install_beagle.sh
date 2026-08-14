@@ -35,6 +35,27 @@ if [[ "${backend}" != cpu && "${backend}" != cuda ]]; then
   echo "BEAGLE_BUILD_BACKEND must be cpu or cuda" >&2
   exit 2
 fi
+cuda_supported_precisions="${BEAGLE_CUDA_SUPPORTED_PRECISIONS:-}"
+if [[ "${backend}" == cuda && -z "${cuda_supported_precisions}" ]]; then
+  case "${source_revision}" in
+    d1e9c62f922cf544fda4555aedf113519367c07a)
+      cuda_supported_precisions=FP64
+      ;;
+    bf35ad4a28e5f03edaa10dfd77c1b54eee0d9595)
+      cuda_supported_precisions="FP64 FP32"
+      ;;
+    *)
+      echo "BEAGLE_CUDA_SUPPORTED_PRECISIONS is required for an unknown CUDA source revision" >&2
+      exit 2
+      ;;
+  esac
+fi
+for precision in ${cuda_supported_precisions}; do
+  if [[ "${precision}" != FP64 && "${precision}" != FP32 ]]; then
+    echo "BEAGLE_CUDA_SUPPORTED_PRECISIONS must contain FP64, FP32, or both" >&2
+    exit 2
+  fi
+done
 if [[ $# -gt 1 ]]; then
   echo "usage: $0 [installation-prefix]" >&2
   exit 2
@@ -226,6 +247,9 @@ cmake --install "${build_directory}"
   echo "beagle_cmake_build_jni=OFF"
   echo "beagle_cmake_build_openmp=OFF"
   echo "beagle_cmake_build_bit=OFF"
+  if [[ "${backend}" == cuda ]]; then
+    echo "beagle_cuda_supported_precisions=${cuda_supported_precisions}"
+  fi
 } > "${metadata}"
 touch "${marker}"
 echo "Installed BEAGLE ${version} with ${backend} support in ${prefix}"

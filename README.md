@@ -450,6 +450,12 @@ length policy, so changed prepared data cannot silently reuse old results.
 builds both Linux accelerator backends from checksum-pinned SDKs, executes the
 backend matching the detected device, and records the host and device
 configuration. CUDA execution is additionally checked with Compute Sanitizer.
+The notebook renders a compact live progress view by default while retaining
+every build line, benchmark record, and validation message in the downloadable
+report. Set `TREE_HMM_NOTEBOOK_LOG_LEVEL=full` to render that complete stream or
+`TREE_HMM_NOTEBOOK_LOG_LEVEL=quiet` to show only completion and failure
+milestones. This display setting does not alter or invalidate resumable
+benchmark data.
 If Compute Sanitizer is unavailable while CUDA validation is selected, the
 run records `validation_incomplete` and stops; only the explicit
 `TREE_HMM_SKIP_SANITIZER=1` override permits validation to proceed without it.
@@ -471,8 +477,14 @@ not reclassified later.
 Before native execution, the launcher verifies that the host NVIDIA driver is
 new enough for the pinned CUDA toolkit or that the pinned ROCm runtime can
 enumerate the selected AMD device through the host kernel driver. The notebook
-compares against the pinned BEAGLE 4.1.0 pre-release commit on the CPU and, on
-NVIDIA, the CUDA device, then evaluates the complete Fish Tree of Life
+compares against the pinned BEAGLE 4.1.0 pre-release commit in FP64. That
+revision's CUDA source deliberately disables single-precision PTX generation
+and dispatch even though its plugin still advertises FP32. For the matched FP32
+CPU/CUDA comparison, the workflow therefore uses the unmodified official
+BEAGLE 4.0.1 release, the last release containing the single-precision CUDA
+kernels. It records the selected BEAGLE version and implementation on every
+row and never labels the FP32 measurements as BEAGLE 4.1. The notebook then
+evaluates the complete Fish Tree of Life
 alignment and either 25 curated PANDIT families (the default profile) or all
 325 qualifying families (the complete profile) in matched FP64 and FP32. For
 capacity-bounded alignment runs, each
