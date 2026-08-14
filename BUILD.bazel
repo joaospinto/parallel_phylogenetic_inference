@@ -418,6 +418,35 @@ cc_binary(
     ],
 )
 
+# Compile the CUDA and ROCm benchmark front ends with ordinary host C++ as
+# well as with their native toolchains.  Their public headers are platform
+# neutral; compiling the two translation units here catches namespace and
+# shared-driver errors even on a machine without either GPU SDK.  The empty
+# test main does not reference the archived front-end objects, so their own
+# main functions are not linked into the test executable.
+cc_library(
+    name = "gpu_benchmark_frontends_compile",
+    srcs = [
+        "benchmarks/benchmark.h",
+        "benchmarks/cuda_benchmark.cc",
+        "benchmarks/gpu_backend_benchmark.inc",
+        "benchmarks/rocm_benchmark.cc",
+        "benchmarks/synthetic.h",
+    ],
+    deps = [
+        ":parallel_phylogenetics_cuda_stub",
+        ":parallel_phylogenetics_rocm_stub",
+    ],
+)
+
+cc_test(
+    name = "gpu_benchmark_frontends_compile_test",
+    srcs = ["tests/gpu_benchmark_frontends_compile_test.cc"],
+    deps = [
+        ":gpu_benchmark_frontends_compile",
+    ],
+)
+
 # Optional benchmark against the external BEAGLE likelihood library. The
 # target is deliberately manual so BEAGLE is not a dependency of the library
 # or its ordinary build and test targets.

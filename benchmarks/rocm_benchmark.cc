@@ -1,6 +1,7 @@
 #include "parallel_phylogenetics/rocm.h"
 
-#define PARALLEL_PHYLOGENETICS_ACCELERATOR_NAMESPACE rocm
+#define PARALLEL_PHYLOGENETICS_ACCELERATOR_NAMESPACE                         \
+  parallel_phylogenetics::rocm
 #define PARALLEL_PHYLOGENETICS_GPU_NAME "ROCm"
 #define PARALLEL_PHYLOGENETICS_BACKEND_NAME "rocm"
 #include "benchmarks/gpu_backend_benchmark.inc"
