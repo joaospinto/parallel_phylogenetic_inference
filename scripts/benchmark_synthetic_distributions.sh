@@ -105,6 +105,7 @@ echo "# deterministic_seed_base=${seed}"
 echo "# synthetic_patterns=distinct deterministic nucleotide patterns; not JC69 simulations"
 echo "# selection_rule=complete Cartesian product; no cell selected from timings"
 echo "# benchmark_mode=${benchmark_mode}"
+echo "# benchmark_binary_directory=${benchmark_binary_directory}"
 total_cases=$((${#topologies[@]} * ${#leaf_counts[@]} * \
   ${#pattern_counts[@]} * replicates))
 echo "# planned_cases=${total_cases}"

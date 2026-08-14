@@ -20,6 +20,15 @@ benchmark_initialize_method_set() {
   local canonical_specification
   local canonical_specs_seen="|"
   local needs_beagle=0
+  benchmark_binary_directory="${TREE_HMM_BENCHMARK_BINARY_DIRECTORY:-bazel-bin}"
+  if [[ -n "${TREE_HMM_BENCHMARK_BINARY_DIRECTORY:-}" ]]; then
+    if [[ "${benchmark_binary_directory}" != /* ||
+          ! -d "${benchmark_binary_directory}" ]]; then
+      echo "TREE_HMM_BENCHMARK_BINARY_DIRECTORY must be an absolute directory" \
+        >&2
+      return 2
+    fi
+  fi
   for specification in "$@"; do
     case "${specification}" in
       cuda|rocm|metal)
@@ -68,6 +77,26 @@ benchmark_initialize_method_set() {
     return 2
   fi
 
+  if [[ "${dry_run}" == 0 &&
+        -n "${TREE_HMM_BENCHMARK_BINARY_DIRECTORY:-}" ]]; then
+    local method
+    local binary
+    for method in "${benchmark_methods[@]}"; do
+      case "${method}" in
+        cuda|rocm|metal)
+          binary="${benchmark_binary_directory}/${method}_benchmark"
+          ;;
+        beagle-cpu|beagle-cuda)
+          binary="${benchmark_binary_directory}/beagle_benchmark"
+          ;;
+      esac
+      if [[ ! -x "${binary}" ]]; then
+        echo "benchmark binary is not executable: ${binary}" >&2
+        return 2
+      fi
+    done
+  fi
+
   if [[ "${needs_beagle}" == 1 && "${dry_run}" == 0 ]]; then
     # Configure once in the process that launches every interleaved child.
     # This is required on macOS, where a parent shell cannot reliably pass a
@@ -87,16 +116,18 @@ benchmark_select_method() {
   benchmark_method_specification="${benchmark_method_specs[method_index]}"
   case "${benchmark_method}" in
     cuda|rocm|metal)
-      benchmark_command=("bazel-bin/${benchmark_method}_benchmark"
+      benchmark_command=("${benchmark_binary_directory}/${benchmark_method}_benchmark"
                          --benchmark-mode "${benchmark_mode}")
       ;;
     beagle-cpu)
-      benchmark_command=(bazel-bin/beagle_benchmark --beagle-resource cpu
+      benchmark_command=("${benchmark_binary_directory}/beagle_benchmark"
+                         --beagle-resource cpu
                          --beagle-threads "${benchmark_resume_threads}"
                          --benchmark-mode "${benchmark_mode}")
       ;;
     beagle-cuda)
-      benchmark_command=(bazel-bin/beagle_benchmark --beagle-resource cuda
+      benchmark_command=("${benchmark_binary_directory}/beagle_benchmark"
+                         --beagle-resource cuda
                          --beagle-threads 1 --benchmark-mode "${benchmark_mode}")
       ;;
     *)

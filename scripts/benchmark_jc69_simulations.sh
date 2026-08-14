@@ -181,6 +181,7 @@ echo "# reported_sizes=raw sequence length and retained unique-pattern count"
 echo "# comparison_scope=complete likelihood evaluation, not site-order incremental updates"
 echo "# selection_rule=complete prespecified Cartesian product; no case selected from timings"
 echo "# benchmark_mode=${benchmark_mode}"
+echo "# benchmark_binary_directory=${benchmark_binary_directory}"
 if [[ "${#benchmark_methods[@]}" -eq 1 ]]; then
   method_order_policy=single-method
 else

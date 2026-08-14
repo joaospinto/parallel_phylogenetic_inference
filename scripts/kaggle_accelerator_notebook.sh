@@ -61,6 +61,31 @@ if [[ ! -r "${work}/SOURCE_REVISIONS.txt" ]]; then
   echo "the source input is missing SOURCE_REVISIONS.txt" >&2
   exit 2
 fi
+packaged_report="${work}/PREVIOUS_BENCHMARK_REPORT.txt"
+packaged_report_checksum="${work}/PREVIOUS_BENCHMARK_REPORT.sha256"
+if [[ -r "${packaged_report_checksum}" ]]; then
+  if [[ ! -r "${packaged_report}" ]]; then
+    echo "the source input has a report checksum but no embedded report" >&2
+    exit 2
+  fi
+  read -r expected_packaged_report_sha256 ignored < \
+    "${packaged_report_checksum}"
+  expected_packaged_report_sha256="$(
+    printf '%s' "${expected_packaged_report_sha256}" | tr '[:upper:]' '[:lower:]'
+  )"
+  if [[ ! "${expected_packaged_report_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "the embedded benchmark report checksum is malformed" >&2
+    exit 2
+  fi
+  actual_packaged_report_sha256="$(sha256_file "${packaged_report}")"
+  if [[ "${actual_packaged_report_sha256}" != \
+        "${expected_packaged_report_sha256}" ]]; then
+    echo "the embedded benchmark report failed its SHA-256 check" >&2
+    exit 2
+  fi
+elif [[ -r "${packaged_report}" ]]; then
+  echo "embedded benchmark report has no checksum; treating it as legacy input"
+fi
 
 if [[ -z "${TREE_HMM_EMPIRICAL_MANIFESTS:-}" ]]; then
   corpus_root="${work}/attached-corpora"
@@ -287,6 +312,7 @@ cache_identity="$(
     echo "fish-minimum-site-batch=${TREE_HMM_FISH_MINIMUM_SITE_BATCH:-256}"
     echo "host-memory-guard-percent=${TREE_HMM_HOST_MEMORY_GUARD_PERCENT:-75}"
     echo "host-memory-guard-kib=${TREE_HMM_HOST_MEMORY_GUARD_KIB:-automatic}"
+    echo "benchmark-binary-directory=${TREE_HMM_BENCHMARK_BINARY_DIRECTORY:-bazel-bin}"
     echo "pandit-minimum-leaves=${PANDIT_MIN_LEAVES:-100}"
     echo "distribution-topologies=${TREE_HMM_DISTRIBUTION_TOPOLOGIES:-yule beta-critical uniform caterpillar}"
     echo "distribution-leaves=${TREE_HMM_DISTRIBUTION_LEAVES:-128 512 2048 8192}"
@@ -333,7 +359,6 @@ else
   done < <(find "${notebook_input_dir}" -type f \
     -name "parallel_phylogenetics_${accelerator_backend}_report*.txt" \
     -print | sort)
-  packaged_report="${work}/PREVIOUS_BENCHMARK_REPORT.txt"
   if report_matches_sources "${packaged_report}"; then
     packaged_lines="$(wc -l < "${packaged_report}")"
     if [[ "${packaged_lines}" -gt "${prior_lines}" ]]; then

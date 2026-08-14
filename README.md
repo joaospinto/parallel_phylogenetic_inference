@@ -177,6 +177,17 @@ commits can be selected with `BEAGLE_VERSION_LABEL`,
 in `BEAGLE_BUILD_METADATA.txt`. A development branch is never silently
 reported as a numbered release.
 
+For JC69, the benchmark constructs finite-time transition matrices with the
+same stable, configured-precision routine used by the native implementation,
+copies them to BEAGLE's double-valued public input, and uploads them through
+BEAGLE's matrix API. This avoids the cancellation observed in BEAGLE's
+single-precision eigendecomposition update on very short branches while
+preserving matched-precision model semantics. Matrix construction and upload
+remain inside the measured factor-update and full-input-update paths; there is
+no precision-specific benchmark path. With a local BEAGLE install, the
+optional FP32 regression is available as
+`bazel test //:beagle_jc69_regression_test --config=fp32`.
+
 Warmup and workspace allocation are excluded. Within each binary, conventional
 CPU and accelerator or BEAGLE execution alternate between repetitions. For an
 empirical manifest, the driver additionally rotates the native and BEAGLE
@@ -191,6 +202,14 @@ before each case to reduce thermal-state bias on passively cooled systems. The
 reported total accelerator time includes conversion from the phylogenetic
 model to generic tree-HMM factors, host/device transfer, kernel execution, and
 result transfer.
+
+For long controlled runs,
+`TREE_HMM_BENCHMARK_BINARY_DIRECTORY=/absolute/path` selects an immutable
+directory containing the native and BEAGLE benchmark executables. Each
+controlled-study driver validates every selected executable before the run and
+records the directory in its report. This prevents a concurrent Bazel build
+from repointing `bazel-bin` beneath an experiment; without the override, the
+usual repository-local `bazel-bin` behavior is unchanged.
 
 The distribution study is a prespecified Cartesian product of taxa and unique
 pattern counts over deterministic replicates of Yule, critical beta-splitting,
@@ -453,9 +472,10 @@ Before native execution, the launcher verifies that the host NVIDIA driver is
 new enough for the pinned CUDA toolkit or that the pinned ROCm runtime can
 enumerate the selected AMD device through the host kernel driver. The notebook
 compares against the pinned BEAGLE 4.1.0 pre-release commit on the CPU and, on
-NVIDIA, the CUDA device,
-then evaluates the 325-family PANDIT subset and complete Fish Tree of Life
-alignment in matched FP64 and FP32. For capacity-bounded alignment runs, each
+NVIDIA, the CUDA device, then evaluates the complete Fish Tree of Life
+alignment and either 25 curated PANDIT families (the default profile) or all
+325 qualifying families (the complete profile) in matched FP64 and FP32. For
+capacity-bounded alignment runs, each
 method tries geometrically increasing site batches up to the complete
 alignment. Device-allocation failures stop only the affected accelerator
 sweep. CPU capacity probes run under a ceiling derived from the runtime memory
@@ -491,7 +511,10 @@ any subset without duplicating orchestration, for example
 `TREE_HMM_BENCHMARK_SECTIONS="fish pandit"` together with
 `TREE_HMM_PRECISIONS_OVERRIDE=FP32`. Existing `TREE_HMM_SKIP_*` controls,
 repeat-count overrides, sanitizer controls, and memory-guard overrides remain
-available.
+available. Newly packaged embedded reports carry a SHA-256 checksum that the
+launcher verifies before considering their cache identity; older unpacked
+inputs without this checksum remain readable as explicitly identified legacy
+inputs.
 
 The report ends with `benchmark_suite_complete` only after every effective
 section and selected precision has emitted its completion marker, every

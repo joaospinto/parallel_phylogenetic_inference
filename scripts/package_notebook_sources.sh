@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{ print $1 }'
+  else
+    shasum -a 256 "$1" | awk '{ print $1 }'
+  fi
+}
+
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 parent_dir="$(dirname "${repo_dir}")"
 worktree_dir="$(dirname "${parent_dir}")/worktrees/parallel_phylogenetics_corpora"
@@ -49,8 +57,9 @@ if [[ -n "${resume_report}" ]]; then
     exit 2
   fi
   cp "${resume_report}" "${staging}/PREVIOUS_BENCHMARK_REPORT.txt"
-  shasum -a 256 "${resume_report}" > \
-    "${staging}/PREVIOUS_BENCHMARK_REPORT.sha256"
+  printf '%s  %s\n' "$(sha256_file "${resume_report}")" \
+    PREVIOUS_BENCHMARK_REPORT.txt > \
+      "${staging}/PREVIOUS_BENCHMARK_REPORT.sha256"
 fi
 
 (

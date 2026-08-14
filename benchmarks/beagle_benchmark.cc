@@ -109,7 +109,6 @@ struct BeagleTree {
   std::vector<int> node_buffers;
   std::vector<int> matrix_indices;
   std::vector<int> scale_indices;
-  std::vector<double> edge_lengths;
   std::vector<BeagleOperation> operations;
   std::vector<std::vector<double>> tip_partials;
   std::vector<std::vector<int>> tip_states;
@@ -255,14 +254,6 @@ BeagleTree MakeBeagleTree(AlignmentModelView model,
   const bool needs_identity = needs_constant || temporary_count != 0;
   result.matrix_indices.resize(edges + (needs_identity ? 1 : 0));
   std::iota(result.matrix_indices.begin(), result.matrix_indices.end(), 0);
-  result.edge_lengths.reserve(result.matrix_indices.size());
-  for (const Scalar length : model.branch_lengths) {
-    result.edge_lengths.push_back(static_cast<double>(
-        length * model.substitution_rate));
-  }
-  if (needs_identity)
-    result.edge_lengths.push_back(0.0);
-
   result.tip_partials.resize(static_cast<std::size_t>(result.tip_count));
   result.tip_states.resize(static_cast<std::size_t>(result.tip_count));
   result.tip_observation_indices.resize(
@@ -304,7 +295,9 @@ public:
                   int threads,
                   std::span<const std::uint8_t> compact_observations)
       : tree_(MakeBeagleTree(model, compact_observations)),
-        site_values_(model.sites) {
+        site_values_(model.sites),
+        transition_matrices_(tree_.matrix_indices.size() * 16),
+        transition_padded_values_(tree_.matrix_indices.size(), 1.0) {
     const bool threaded = resource == "cpu" && threads > 1;
     const long processor = resource == "cpu" ? BEAGLE_FLAG_PROCESSOR_CPU
                                                : BEAGLE_FLAG_PROCESSOR_GPU;
@@ -361,33 +354,15 @@ public:
 
   double UpdateFactors(AlignmentModelView model) {
     const Clock::time_point begin = Clock::now();
-    if (tree_.edge_lengths.size() != model.branch_lengths.size() &&
-        tree_.edge_lengths.size() != model.branch_lengths.size() + 1) {
+    if (tree_.matrix_indices.size() != model.branch_lengths.size() &&
+        tree_.matrix_indices.size() != model.branch_lengths.size() + 1) {
       throw std::invalid_argument("BEAGLE branch-factor shape changed");
     }
-    for (std::size_t edge = 0; edge < model.branch_lengths.size(); ++edge) {
-      tree_.edge_lengths[edge] = static_cast<double>(
-          model.branch_lengths[edge] * model.substitution_rate);
-    }
-    if (tree_.edge_lengths.size() > model.branch_lengths.size())
-      tree_.edge_lengths.back() = 0.0;
-    constexpr std::array<double, 16> kEigenvectors{
-        1.0,  2.0, 0.0,  0.5, 1.0, -2.0, 0.5, 0.0,
-        1.0,  2.0, 0.0, -0.5, 1.0, -2.0, -0.5, 0.0};
-    constexpr std::array<double, 16> kInverseEigenvectors{
-        0.25, 0.25,   0.25, 0.25, 0.125, -0.125, 0.125, -0.125,
-        0.0,  1.0,    0.0,  -1.0, 1.0,   0.0,    -1.0,  0.0};
-    constexpr std::array<double, 4> kEigenvalues{
-        0.0, -4.0 / 3.0, -4.0 / 3.0, -4.0 / 3.0};
     constexpr std::array<double, 1> kCategoryRates{1.0};
     constexpr std::array<double, 1> kCategoryWeights{1.0};
     std::array<double, 4> frequencies{};
     for (std::size_t state = 0; state < frequencies.size(); ++state)
       frequencies[state] = static_cast<double>(model.root_frequencies[state]);
-    CheckBeagle(beagleSetEigenDecomposition(
-                    instance_->get(), 0, kEigenvectors.data(),
-                    kInverseEigenvectors.data(), kEigenvalues.data()),
-                "beagleSetEigenDecomposition");
     CheckBeagle(beagleSetStateFrequencies(instance_->get(), 0,
                                           frequencies.data()),
                 "beagleSetStateFrequencies");
@@ -397,11 +372,23 @@ public:
     CheckBeagle(beagleSetCategoryWeights(instance_->get(), 0,
                                          kCategoryWeights.data()),
                 "beagleSetCategoryWeights");
-    CheckBeagle(beagleUpdateTransitionMatrices(
-                    instance_->get(), 0, tree_.matrix_indices.data(), nullptr,
-                    nullptr, tree_.edge_lengths.data(),
-                    CheckedInt(tree_.matrix_indices.size(), "matrix count")),
-                "beagleUpdateTransitionMatrices");
+    const auto set_transition = [&](std::size_t matrix, Scalar branch_length) {
+      const std::array<Scalar, 16> transition =
+          JukesCantorTransition(branch_length, model.substitution_rate);
+      std::transform(transition.begin(), transition.end(),
+                     transition_matrices_.begin() + matrix * 16,
+                     [](Scalar value) { return static_cast<double>(value); });
+    };
+    for (std::size_t edge = 0; edge < model.branch_lengths.size(); ++edge)
+      set_transition(edge, model.branch_lengths[edge]);
+    if (tree_.matrix_indices.size() > model.branch_lengths.size())
+      set_transition(model.branch_lengths.size(), Scalar{0});
+    CheckBeagle(
+        beagleSetTransitionMatrices(
+            instance_->get(), tree_.matrix_indices.data(),
+            transition_matrices_.data(), transition_padded_values_.data(),
+            CheckedInt(tree_.matrix_indices.size(), "matrix count")),
+        "beagleSetTransitionMatrices");
     return Milliseconds(begin, Clock::now());
   }
 
@@ -498,6 +485,8 @@ private:
 
   BeagleTree tree_;
   std::vector<double> site_values_;
+  std::vector<double> transition_matrices_;
+  std::vector<double> transition_padded_values_;
   std::unique_ptr<BeagleInstance> instance_;
   std::string resource_name_;
   std::string implementation_name_;
@@ -791,6 +780,12 @@ void RunOne(const BeagleOptions &options, std::size_t replicate) {
                  "multiplicities are fixed to one inside BEAGLE and the "
                  "empirical multiplicities are applied outside timing for "
                  "both implementations\n"
+              << "# transition_matrices=the native stable closed-form JC69 "
+                 "routine constructs matrices in the configured precision; "
+                 "they are copied to BEAGLE's double-valued public input and "
+                 "uploaded through "
+                 "beagleSetTransitionMatrices; construction and upload are "
+                 "included whenever factors are timed\n"
               << "# warmup=all modes execute one untimed evaluation before "
                  "measurement; this is not included in initial_staging_ms\n"
               << "# timing_initial_staging=one untimed full-input evaluation "

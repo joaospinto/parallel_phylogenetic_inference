@@ -13,13 +13,64 @@ from typing import NamedTuple
 MAXIMUM_NORMALIZED_ERROR = {"FP32": 2e-3, "FP64": 1e-10}
 
 
-class CapacityLimit(NamedTuple):
+class CapacityProtocol(NamedTuple):
     method: str
     precision: str
     dataset: str
     study: str
     benchmark_mode: str
     threads: str
+
+
+def canonical_dataset(dataset: str) -> str:
+    """Normalize the numeric suffix of a synthetic-JC69 capacity identity."""
+    if not dataset.startswith("synthetic-jc69-"):
+        return dataset
+    try:
+        prefix, leaves, sites, height = dataset.rsplit("-", 3)
+        return (
+            f"{prefix}-{int(leaves)}-{int(sites)}-"
+            f"{format(float(height), '.17g')}"
+        )
+    except ValueError:
+        return dataset
+
+
+def capacity_protocol(
+    method_name: str,
+    precision: str,
+    dataset: str,
+    study: str,
+    benchmark_mode: str,
+    threads: str,
+) -> CapacityProtocol:
+    return CapacityProtocol(
+        method_name,
+        precision,
+        canonical_dataset(dataset),
+        study,
+        benchmark_mode,
+        threads,
+    )
+
+
+def row_capacity_dataset(row: dict[str, str]) -> str:
+    dataset = row.get("dataset", "unknown")
+    if (
+        dataset == "synthetic-jc69"
+        and row.get("study") == "clock-like-jc69-simulation"
+    ):
+        required = (
+            "topology",
+            "leaves",
+            "sites",
+            "evolutionary_root_to_tip_distance",
+        )
+        if all(row.get(field, "") for field in required):
+            dataset = "synthetic-jc69-{}-{}-{}-{}".format(
+                *(row[field] for field in required)
+            )
+    return canonical_dataset(dataset)
 
 
 def marker_values(line: str) -> dict[str, str]:
@@ -47,18 +98,32 @@ def verify(
     benchmark_rows = 0
     task_rows = 0
     section_rows = {section: 0 for section in selected_sections}
-    successful_capacity_protocols: set[CapacityLimit] = set()
-    capacity_limits: list[tuple[int, CapacityLimit]] = []
+    successful_capacity_batches: dict[CapacityProtocol, set[int]] = {}
+    capacity_limits: list[tuple[int, CapacityProtocol, int]] = []
     completed_sections: set[tuple[str, str]] = set()
     lines = path.read_text(encoding="utf-8").splitlines()
     for line_number, raw_line in enumerate(lines, 1):
         line = raw_line.strip()
         if line.startswith("# capacity_limit "):
             values = marker_values(line)
+            try:
+                first_infeasible_site_batch = int(
+                    values["first_infeasible_site_batch"]
+                )
+            except (KeyError, ValueError) as error:
+                raise ValueError(
+                    f"{path}:{line_number}: capacity boundary has an invalid "
+                    "first_infeasible_site_batch"
+                ) from error
+            if first_infeasible_site_batch <= 0:
+                raise ValueError(
+                    f"{path}:{line_number}: capacity boundary has a nonpositive "
+                    "first_infeasible_site_batch"
+                )
             capacity_limits.append(
                 (
                     line_number,
-                    CapacityLimit(
+                    capacity_protocol(
                         values.get("method", ""),
                         values.get("precision", ""),
                         values.get("dataset", "unknown"),
@@ -66,6 +131,7 @@ def verify(
                         values.get("benchmark_mode", "full-input-update"),
                         values.get("threads", "none"),
                     ),
+                    first_infeasible_site_batch,
                 )
             )
             continue
@@ -118,28 +184,36 @@ def verify(
             raise ValueError(
                 f"{path}:{line_number}: invalid benchmark error field"
             ) from error
-        if not math.isfinite(absolute_error):
+        if not math.isfinite(absolute_error) or absolute_error < 0:
             raise ValueError(
-                f"{path}:{line_number}: nonfinite descriptive absolute error"
+                f"{path}:{line_number}: invalid descriptive absolute error"
             )
         limit = MAXIMUM_NORMALIZED_ERROR[precision]
-        if not math.isfinite(normalized_error) or normalized_error > limit:
+        if (
+            not math.isfinite(normalized_error)
+            or normalized_error < 0
+            or normalized_error > limit
+        ):
             raise ValueError(
                 f"{path}:{line_number}: normalized error {normalized_error} "
                 f"exceeds the {precision} limit {limit}"
             )
         benchmark_rows += 1
         row_method, row_threads = method(row)
-        successful_capacity_protocols.add(
-            CapacityLimit(
-                row_method,
-                precision,
-                row.get("dataset", "unknown"),
-                row.get("study", "standard"),
-                row.get("benchmark_mode", "full-input-update"),
-                row_threads,
-            )
+        protocol = capacity_protocol(
+            row_method,
+            precision,
+            row_capacity_dataset(row),
+            row.get("study", "standard"),
+            row.get("benchmark_mode", "full-input-update"),
+            row_threads,
         )
+        try:
+            site_batch = int(row["site_batch"])
+        except (KeyError, ValueError):
+            site_batch = 0
+        if site_batch > 0:
+            successful_capacity_batches.setdefault(protocol, set()).add(site_batch)
         study = row.get("study", "standard")
         dataset = row.get("dataset", "")
         if (
@@ -181,22 +255,12 @@ def verify(
             task_rows += 1
             if "tasks" in selected_sections:
                 section_rows["tasks"] += 1
-    for line_number, capacity_limit in capacity_limits:
-        matching_protocol = capacity_limit in successful_capacity_protocols
-        if (
-            not matching_protocol
-            and capacity_limit.study == "clock-like-jc69-simulation"
-            and capacity_limit.dataset.startswith("synthetic-jc69-")
+    for line_number, protocol, first_infeasible_site_batch in capacity_limits:
+        successful_batches = successful_capacity_batches.get(protocol, set())
+        if not any(
+            site_batch < first_infeasible_site_batch
+            for site_batch in successful_batches
         ):
-            matching_protocol = CapacityLimit(
-                capacity_limit.method,
-                capacity_limit.precision,
-                "synthetic-jc69",
-                capacity_limit.study,
-                capacity_limit.benchmark_mode,
-                capacity_limit.threads,
-            ) in successful_capacity_protocols
-        if not matching_protocol:
             raise ValueError(
                 f"{path}:{line_number}: capacity boundary has no successful "
                 "smaller-batch row for the same method/problem/protocol"

@@ -13,6 +13,8 @@ source "${root}/scripts/benchmark_resume.sh"
 source "${root}/scripts/capacity_bounded.sh"
 # shellcheck source=scripts/accelerator_environment.sh
 source "${root}/scripts/accelerator_environment.sh"
+# shellcheck source=scripts/benchmark_method_set.sh
+source "${root}/scripts/benchmark_method_set.sh"
 
 tree_hmm_version_at_least 580.159.04 525.60.13
 tree_hmm_version_at_least 525.60.13 525.60.13
@@ -47,6 +49,29 @@ benchmark_resume_validation_completed "${report}" FP64
 
 work_directory="$(mktemp -d "${TMPDIR:-/tmp}/benchmark-shell-test.XXXXXX")"
 trap 'rm -rf "${work_directory}"' EXIT
+
+binary_directory="${work_directory}/immutable-binaries"
+mkdir -p "${binary_directory}"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > \
+  "${binary_directory}/metal_benchmark"
+chmod +x "${binary_directory}/metal_benchmark"
+TREE_HMM_BENCHMARK_BINARY_DIRECTORY="${binary_directory}" \
+  benchmark_initialize_method_set "${root}/scripts" 1 0 metal
+benchmark_select_method 0 full-input-update
+[[ "${benchmark_command[0]}" == "${binary_directory}/metal_benchmark" ]]
+if TREE_HMM_BENCHMARK_BINARY_DIRECTORY=relative \
+     benchmark_initialize_method_set "${root}/scripts" 1 1 metal \
+     >/dev/null 2>&1; then
+  echo "controlled driver accepted a relative binary directory" >&2
+  exit 1
+fi
+chmod -x "${binary_directory}/metal_benchmark"
+if TREE_HMM_BENCHMARK_BINARY_DIRECTORY="${binary_directory}" \
+     benchmark_initialize_method_set "${root}/scripts" 1 0 metal \
+     >/dev/null 2>&1; then
+  echo "controlled driver accepted a non-executable benchmark binary" >&2
+  exit 1
+fi
 
 if [[ "$(uname -s)" == Linux ]]; then
   memory_fixture="${work_directory}/memory-fixture"
@@ -142,14 +167,49 @@ if python3 "${root}/scripts/verify_benchmark_correctness.py" \
 fi
 capacity_success_report="${work_directory}/capacity-success-report.txt"
 cat > "${capacity_success_report}" <<'EOF'
-backend,precision,benchmark_mode,study,dataset,max_abs_error,max_relative_error
-cuda,FP32,full-input-update,fish-tree-of-life-minbrlen-0.000001,actinopt_12k_raxml,1000,0.001
+backend,precision,benchmark_mode,study,dataset,site_batch,max_abs_error,max_relative_error
+cuda,FP32,full-input-update,fish-tree-of-life-minbrlen-0.000001,actinopt_12k_raxml,256,1000,0.001
 # capacity_limit method=cuda precision=FP32 dataset=actinopt_12k_raxml study=fish-tree-of-life-minbrlen-0.000001 benchmark_mode=full-input-update threads=none first_infeasible_site_batch=512 reason=allocation-failure
 # benchmark_section_complete section=fish backend=cuda precision=FP32
 EOF
 python3 "${root}/scripts/verify_benchmark_correctness.py" \
   "${capacity_success_report}" --selected-sections fish \
   --selected-precisions FP32 >/dev/null
+sed 's/,256,1000,0.001$/,512,1000,0.001/' \
+  "${capacity_success_report}" > "${work_directory}/capacity-not-smaller.txt"
+if python3 "${root}/scripts/verify_benchmark_correctness.py" \
+     "${work_directory}/capacity-not-smaller.txt" \
+     --selected-sections fish --selected-precisions FP32 \
+     >/dev/null 2>&1; then
+  echo "strict correctness verifier accepted a non-smaller capacity row" >&2
+  exit 1
+fi
+jc69_capacity_success_report="${work_directory}/jc69-capacity-success.txt"
+cat > "${jc69_capacity_success_report}" <<'EOF'
+backend,precision,benchmark_mode,study,dataset,topology,sequence_generation,evolutionary_root_to_tip_distance,leaves,sites,site_batch,max_abs_error,max_relative_error
+cuda,FP32,full-input-update,clock-like-jc69-simulation,synthetic-jc69,beta-critical,jc69,0.0010,128,1024,256,1000,0.001
+# capacity_limit method=cuda precision=FP32 dataset=synthetic-jc69-beta-critical-128-1024-0.001 study=clock-like-jc69-simulation benchmark_mode=full-input-update threads=none first_infeasible_site_batch=512 reason=allocation-failure
+# benchmark_section_complete section=jc69 backend=cuda precision=FP32
+EOF
+python3 "${root}/scripts/verify_benchmark_correctness.py" \
+  "${jc69_capacity_success_report}" --selected-sections jc69 \
+  --selected-precisions FP32 >/dev/null
+sed 's/,128,1024,256,/,256,1024,256,/' \
+  "${jc69_capacity_success_report}" > "${work_directory}/jc69-wrong-cell.txt"
+if python3 "${root}/scripts/verify_benchmark_correctness.py" \
+     "${work_directory}/jc69-wrong-cell.txt" \
+     --selected-sections jc69 --selected-precisions FP32 \
+     >/dev/null 2>&1; then
+  echo "strict correctness verifier accepted a different JC69 cell" >&2
+  exit 1
+fi
+sed 's/,0.002$/,-0.001/' "${correctness_report}" > \
+  "${work_directory}/negative-correctness-report.txt"
+if python3 "${root}/scripts/verify_benchmark_correctness.py" \
+     "${work_directory}/negative-correctness-report.txt" >/dev/null 2>&1; then
+  echo "strict correctness verifier accepted a negative error" >&2
+  exit 1
+fi
 
 new_report="${work_directory}/new-report.txt"
 cat > "${new_report}" <<'EOF'
@@ -696,6 +756,31 @@ printf 'previous-row\n' >> \
 cp "${working_root}/parallel_phylogenetics_cuda_report.txt" \
   "${source_root}/PREVIOUS_BENCHMARK_REPORT.txt"
 rm "${working_root}/parallel_phylogenetics_cuda_report.txt"
+printf '%s\n' malformed > \
+  "${source_root}/PREVIOUS_BENCHMARK_REPORT.sha256"
+if TREE_HMM_NOTEBOOK_INPUT_DIR="${launcher_root}/input" \
+   TREE_HMM_NOTEBOOK_WORKING_DIR="${working_root}" \
+   TREE_HMM_PRECISIONS_OVERRIDE=FP32 TREE_HMM_SKIP_FISH_TREE=1 \
+   TREE_HMM_BENCHMARK_SECTIONS="fish pandit" \
+   TREE_HMM_HARDWARE_IDENTITY_OVERRIDE=test-hardware \
+   TREE_HMM_RESUME_SCOPE=hardware-class \
+   TREE_HMM_BEAGLE_CPU_THREADS='1 1' BEAGLE_BUILD_JOBS=1 \
+     bash "${root}/scripts/kaggle_cuda_notebook.sh" "${source_root}" \
+       > "${launcher_root}/bad-embedded-checksum.log" 2>&1; then
+  echo "launcher accepted a malformed embedded report checksum" >&2
+  exit 1
+fi
+grep -Fq 'embedded benchmark report checksum is malformed' \
+  "${launcher_root}/bad-embedded-checksum.log"
+if command -v sha256sum >/dev/null 2>&1; then
+  embedded_report_sha256="$(sha256sum \
+    "${source_root}/PREVIOUS_BENCHMARK_REPORT.txt" | awk '{ print $1 }')"
+else
+  embedded_report_sha256="$(shasum -a 256 \
+    "${source_root}/PREVIOUS_BENCHMARK_REPORT.txt" | awk '{ print $1 }')"
+fi
+printf '%s  PREVIOUS_BENCHMARK_REPORT.txt\n' "${embedded_report_sha256}" > \
+  "${source_root}/PREVIOUS_BENCHMARK_REPORT.sha256"
 TREE_HMM_NOTEBOOK_INPUT_DIR="${launcher_root}/input" \
 TREE_HMM_NOTEBOOK_WORKING_DIR="${working_root}" \
 TREE_HMM_PRECISIONS_OVERRIDE=FP32 TREE_HMM_SKIP_FISH_TREE=1 \
