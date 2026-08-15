@@ -109,6 +109,11 @@ def rows(paths: list[Path]) -> list[dict[str, str]]:
                     continue
                 row = dict(zip(header, fields))
                 row.setdefault("study", "standard")
+                row.setdefault("substitution_model", "jc69")
+                row.setdefault("substitution_rate", "1")
+                row.setdefault("hky_kappa", "4")
+                row.setdefault("rate_categories", "1")
+                row.setdefault("gamma_shape", "none")
                 if (
                     row.get("dataset") != "synthetic"
                     or row["study"] != "independent-taxa-pattern-grid"
@@ -287,6 +292,11 @@ def main() -> None:
         native = methods[arguments.native]
         baseline = methods[arguments.baseline]
         for field in (
+            "substitution_model",
+            "substitution_rate",
+            "hky_kappa",
+            "rate_categories",
+            "gamma_shape",
             "nodes",
             "site_batch",
             "tree_height",

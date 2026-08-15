@@ -21,8 +21,8 @@ struct AlignmentModelView {
   std::span<const btrc::Index> observation_nodes;
   // [site, observation_nodes index].
   std::span<const Nucleotide> observations;
-  std::array<Scalar, 4> root_frequencies{0.25, 0.25, 0.25, 0.25};
-  Scalar substitution_rate = 1.0;
+  NucleotideModel nucleotide_model{};
+  RateMixtureView rate_mixture{};
 };
 
 // Returns a view of a contiguous range of alignment sites without copying its
@@ -31,17 +31,25 @@ struct AlignmentModelView {
 AlignmentModelView SelectSites(AlignmentModelView model, std::size_t first_site,
                                std::size_t site_count);
 
+// Selects one finite-mixture category and folds its rate multiplier into the
+// nucleotide model. The returned view has an implicit single rate category.
+AlignmentModelView SelectRateCategory(AlignmentModelView model,
+                                      std::size_t category);
+
 // One maximum-posterior assignment per site. States have shape [site, node]
 // and use the order A=0, C=1, G=2, T=3.
 struct AlignmentMaximumView {
   std::span<const Scalar> log_weights;
   std::span<const std::uint32_t> states;
+  // Globally shared rate category selected for each site's joint MAP state.
+  std::span<const std::uint32_t> rate_categories;
 };
 
 // One posterior draw per site. States have shape [site, node] and use the
 // order A=0, C=1, G=2, T=3.
 struct AlignmentPosteriorSampleView {
   std::span<const std::uint32_t> states;
+  std::span<const std::uint32_t> rate_categories;
 };
 
 // Posterior probabilities for every site in the supplied alignment view.
@@ -51,6 +59,8 @@ struct AlignmentPosteriorView {
   std::span<const Scalar> log_likelihoods;
   std::span<const Scalar> ancestral_states;
   std::span<const Scalar> substitutions;
+  // [site, rate category].
+  std::span<const Scalar> rate_categories;
 };
 
 // Phylogenetic prepared calls use the generic tree-HMM categorical-input
@@ -86,7 +96,8 @@ private:
   std::unique_ptr<Impl> impl_;
 };
 
-// Converts phylogenetic observations and JC69 branch models into the generic
+// Converts phylogenetic observations and reversible nucleotide branch models
+// into the generic
 // tree-HMM batch layout without allocating. The returned spans are owned by
 // workspace and remain valid until it is prepared or reserved again.
 tree_hmm::BatchedModelView Prepare(AlignmentModelView model,

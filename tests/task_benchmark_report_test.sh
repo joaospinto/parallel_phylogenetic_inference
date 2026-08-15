@@ -4,9 +4,9 @@ set -euo pipefail
 summary="$(python3 scripts/summarize_task_benchmarks.py \
   tests/task_benchmark_report_fixture.txt \
   --backend cuda --precision FP32 --benchmark-mode full-input-update)"
-grep -q '^cuda,FP32,full-input-update,likelihood,1,3,3,3,1e-06,1e-07,0$' \
+grep -q '^cuda,FP32,full-input-update,jc69,1,4,1,none,likelihood,1,3,3,3,1e-06,1e-07,0$' \
   <<<"${summary}"
-grep -q '^cuda,FP32,full-input-update,joint-map,1,3,3,3,1e-06,1e-07,0$' \
+grep -q '^cuda,FP32,full-input-update,jc69,1,4,1,none,joint-map,1,3,3,3,1e-06,1e-07,0$' \
   <<<"${summary}"
 
 bad_report="${TEST_TMPDIR:-${TMPDIR:-/tmp}}/bad-task-report.txt"

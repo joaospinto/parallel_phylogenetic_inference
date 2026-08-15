@@ -13,9 +13,13 @@ void RunOne(const parallel_phylogenetics::benchmark::Options &options,
   using namespace parallel_phylogenetics;
   using namespace parallel_phylogenetics::benchmark;
   const Problem problem = MakeProblem(options, replicate);
+  const BenchmarkEvolutionModel evolution =
+      MakeBenchmarkEvolutionModel(options);
   const AlignmentModelView model{
-      problem.plan, problem.sites, problem.branch_lengths,
-      problem.observation_nodes, problem.observations};
+      problem.plan,           problem.sites,
+      problem.branch_lengths, problem.observation_nodes,
+      problem.observations,   evolution.nucleotide,
+      evolution.rate_view()};
   const std::size_t site_batch =
       options.site_batch == 0 ? problem.sites
                               : std::min(options.site_batch, problem.sites);

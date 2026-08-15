@@ -16,6 +16,11 @@ IDENTITY = (
     "precision",
     "benchmark_mode",
     "study",
+    "substitution_model",
+    "substitution_rate",
+    "hky_kappa",
+    "rate_categories",
+    "gamma_shape",
     "dataset",
     "topology",
     "minimum_branch_length",
@@ -115,6 +120,11 @@ def records(paths: list[Path]) -> list[dict[str, str]]:
                 row = dict(zip(header, fields))
                 row.setdefault("benchmark_mode", "full-input-update")
                 row.setdefault("study", "standard")
+                row.setdefault("substitution_model", "jc69")
+                row.setdefault("substitution_rate", "1")
+                row.setdefault("hky_kappa", "4")
+                row.setdefault("rate_categories", "1")
+                row.setdefault("gamma_shape", "none")
                 row.setdefault("minimum_branch_length", "0")
                 row.setdefault("floored_branch_count", "0")
                 if row.get("baseline") == "beagle":
@@ -394,6 +404,14 @@ def main() -> None:
     parser.add_argument("--dataset-prefix")
     parser.add_argument("--precision", choices=("FP32", "FP64"))
     parser.add_argument(
+        "--nucleotide-model", choices=("jc69", "hky", "gtr"),
+        help="select one substitution model",
+    )
+    parser.add_argument(
+        "--rate-categories", type=int,
+        help="select one rate-category count",
+    )
+    parser.add_argument(
         "--benchmark-mode",
         choices=("fixed-model", "factor-update", "full-input-update"),
     )
@@ -439,6 +457,26 @@ def main() -> None:
             raise ValueError(
                 f"no benchmark records use precision {arguments.precision}"
             )
+    if arguments.nucleotide_model is not None:
+        raw_rows = [
+            row for row in raw_rows
+            if row["substitution_model"] == arguments.nucleotide_model
+        ]
+        if not raw_rows:
+            raise ValueError(
+                "no benchmark records use substitution model "
+                f"{arguments.nucleotide_model}"
+            )
+    if arguments.rate_categories is not None:
+        raw_rows = [
+            row for row in raw_rows
+            if int(row["rate_categories"]) == arguments.rate_categories
+        ]
+        if not raw_rows:
+            raise ValueError(
+                "no benchmark records use rate-category count "
+                f"{arguments.rate_categories}"
+            )
     if arguments.benchmark_mode is not None:
         raw_rows = [
             row
@@ -467,6 +505,18 @@ def main() -> None:
         raise ValueError(
             "--corpus requires --precision and --benchmark-mode so distinct "
             "measurement protocols are never pooled"
+        )
+    protocols = {
+        (
+            row["substitution_model"], row["substitution_rate"],
+            row["hky_kappa"], row["rate_categories"], row["gamma_shape"],
+        )
+        for row in raw_rows
+    }
+    if len(protocols) != 1:
+        raise ValueError(
+            "selected rows mix substitution/rate protocols; filter with "
+            "--nucleotide-model and --rate-categories or split the logs"
         )
     if arguments.corpus and arguments.max_relative_error is None:
         raise ValueError(

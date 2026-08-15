@@ -56,6 +56,11 @@ def records(paths: list[Path]) -> list[dict[str, str]]:
                     f"found {len(fields)}"
                 )
             row = dict(zip(header, fields))
+            row.setdefault("substitution_model", "jc69")
+            row.setdefault("substitution_rate", "1")
+            row.setdefault("hky_kappa", "4")
+            row.setdefault("rate_categories", "1")
+            row.setdefault("gamma_shape", "none")
             row["source"] = f"{path}:{line_number}"
             validate(row)
             result.append(row)
@@ -171,6 +176,8 @@ def main() -> None:
     parser.add_argument("logs", nargs="+", type=Path)
     parser.add_argument("--backend", choices=("cuda", "metal", "rocm"))
     parser.add_argument("--precision", choices=("FP32", "FP64"))
+    parser.add_argument("--nucleotide-model", choices=("jc69", "hky", "gtr"))
+    parser.add_argument("--rate-categories", type=int)
     parser.add_argument(
         "--benchmark-mode",
         choices=("full-input-update", "factor-update", "fixed-model"),
@@ -194,11 +201,30 @@ def main() -> None:
         ("precision", arguments.precision),
         ("benchmark_mode", arguments.benchmark_mode),
         ("study", arguments.study),
+        ("substitution_model", arguments.nucleotide_model),
     ):
         if selected is not None:
             rows = [row for row in rows if row[field] == selected]
     if not rows:
         raise ValueError("no task records satisfy the requested filters")
+    if arguments.rate_categories is not None:
+        rows = [
+            row for row in rows
+            if int(row["rate_categories"]) == arguments.rate_categories
+        ]
+        if not rows:
+            raise ValueError("no task records use the requested rate categories")
+    protocols = {
+        (
+            row["substitution_model"], row["substitution_rate"],
+            row["hky_kappa"], row["rate_categories"], row["gamma_shape"],
+        )
+        for row in rows
+    }
+    if len(protocols) != 1:
+        raise ValueError(
+            "selected task rows mix substitution/rate protocols; filter them"
+        )
 
     maximum_relative = (
         arguments.max_relative_error
@@ -214,6 +240,8 @@ def main() -> None:
             row[field]
             for field in (
                 "backend", "precision", "benchmark_mode", "study", "dataset",
+                "substitution_model", "substitution_rate", "hky_kappa",
+                "rate_categories", "gamma_shape",
                 "topology", "seed_base", "seed", "replicate", "leaves",
                 "nodes", "sites", "unique_patterns", "site_batch",
             )
@@ -250,7 +278,9 @@ def main() -> None:
             raise ValueError(f"task row lies outside declared design at {row['source']}")
         group = (
             row["backend"], row["precision"], row["benchmark_mode"],
-            row["study"], row["dataset"], row["topology"],
+            row["study"], row["substitution_model"],
+            row["substitution_rate"], row["hky_kappa"], row["rate_categories"],
+            row["gamma_shape"], row["dataset"], row["topology"],
         )
         grouped_replicates[group].add(int(row["replicate"]))
     for group, observed in grouped_replicates.items():
@@ -260,13 +290,19 @@ def main() -> None:
                 f"expected {sorted(expected_replicate_set)}"
             )
 
-    groups: dict[tuple[str, str, str, str], list[dict[str, str]]] = defaultdict(list)
+    groups: dict[tuple[str, ...], list[dict[str, str]]] = defaultdict(list)
     for row in rows:
         groups[
-            (row["backend"], row["precision"], row["benchmark_mode"], row["task"])
+            (
+                row["backend"], row["precision"], row["benchmark_mode"],
+                row["substitution_model"], row["substitution_rate"],
+                row["hky_kappa"], row["rate_categories"], row["gamma_shape"],
+                row["task"],
+            )
         ].append(row)
     print(
-        "backend,precision,benchmark_mode,task,problems,median_speedup,"
+        "backend,precision,benchmark_mode,substitution_model,substitution_rate,"
+        "hky_kappa,rate_categories,gamma_shape,task,problems,median_speedup,"
         "minimum_speedup,maximum_speedup,max_abs_error,max_relative_error,"
         "state_mismatches"
     )

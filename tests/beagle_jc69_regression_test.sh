@@ -14,6 +14,7 @@ if [[ -n "${BEAGLE_PREFIX:-}" ]]; then
 fi
 work_directory="$(mktemp -d "${TEST_TMPDIR:-${TMPDIR:-/tmp}}/beagle-jc69.XXXXXX")"
 trap 'rm -rf "${work_directory}"' EXIT
+expected_precision="${PRECISION_LABEL:-FP32}"
 
 "${binary}" --beagle-resource cpu --beagle-threads 1 \
   --topology balanced --leaves 64 --sites 64 \
@@ -31,7 +32,15 @@ trap 'rm -rf "${work_directory}"' EXIT
   --conditioning-ms 0 --study-label beagle-deep-tree-regression > \
   "${work_directory}/deep.txt"
 
-python3 - "${work_directory}/tiny.txt" "${work_directory}/deep.txt" <<'PY'
+"${binary}" --beagle-resource cpu --beagle-threads 1 \
+  --topology yule --leaves 128 --sites 73 \
+  --nucleotide-model gtr --rate-categories 4 --gamma-shape 0.5 \
+  --seed 20260815 --replicates 1 --repeats 1 --conditioning-ms 0 \
+  --study-label beagle-gtr-gamma-regression > \
+  "${work_directory}/gtr-gamma.txt"
+
+python3 - "${work_directory}/tiny.txt" "${work_directory}/deep.txt" \
+  "${work_directory}/gtr-gamma.txt" "${expected_precision}" <<'PY'
 import csv
 import math
 import pathlib
@@ -54,16 +63,32 @@ def rows(path):
 
 tiny = rows(sys.argv[1])
 deep = rows(sys.argv[2])
-if len(tiny) != 2 or len(deep) != 1:
-    raise SystemExit("BEAGLE JC69 regression produced an unexpected row count")
+gtr_gamma = rows(sys.argv[3])
+expected_precision = sys.argv[4]
+if len(tiny) != 2 or len(deep) != 1 or len(gtr_gamma) != 1:
+    raise SystemExit("BEAGLE reversible-model regression produced an unexpected row count")
 for row in tiny + deep:
-    if row["precision"] != "FP32" or row["sequence_generation"] != "jc69":
+    if row["precision"] != expected_precision or row["sequence_generation"] != "jc69":
         raise SystemExit("BEAGLE JC69 regression selected the wrong protocol")
     for field in ("max_abs_error", "max_relative_error"):
         value = float(row[field])
         if not math.isfinite(value) or value < 0:
             raise SystemExit(f"invalid {field} in BEAGLE JC69 regression")
-if float(deep[0]["max_relative_error"]) > 2e-3:
+row = gtr_gamma[0]
+if (
+    row["precision"] != expected_precision
+    or row["substitution_model"] != "gtr"
+    or row["rate_categories"] != "4"
+    or float(row["gamma_shape"]) != 0.5
+):
+    raise SystemExit("BEAGLE GTR+Gamma regression selected the wrong protocol")
+threshold = 2e-3 if expected_precision == "FP32" else 1e-10
+if float(row["max_relative_error"]) > threshold:
+    raise SystemExit(
+        "GTR+Gamma error exceeds the publication gate: "
+        + row["max_relative_error"]
+    )
+if float(deep[0]["max_relative_error"]) > threshold:
     raise SystemExit(
         "deep short-edge JC69 error exceeds the publication gate: "
         + deep[0]["max_relative_error"]
@@ -72,7 +97,7 @@ if float(deep[0]["max_relative_error"]) > 2e-3:
 # whereas BEAGLE's FP32 eigen update before this fix was about 2.4e-4.  Keep a
 # deliberately generous cancellation-sensitive bound in addition to the
 # general publication gate above.
-if float(deep[0]["max_relative_error"]) > 1e-5:
+if expected_precision == "FP32" and float(deep[0]["max_relative_error"]) > 1e-5:
     raise SystemExit(
         "deep short-edge JC69 regression detected transition cancellation: "
         + deep[0]["max_relative_error"]

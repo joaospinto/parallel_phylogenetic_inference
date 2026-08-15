@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "btrc/plan.h"
+#include "parallel_phylogenetics/model.h"
 #include "tree_hmm/scalar.h"
 
 namespace parallel_phylogenetics {
@@ -43,9 +44,11 @@ struct SiteModelView {
   const btrc::Plan &plan;
   std::span<const Scalar> branch_lengths;
   std::span<const Nucleotide> observations;
-  std::array<Scalar, 4> root_frequencies{0.25, 0.25, 0.25, 0.25};
-  Scalar substitution_rate = 1.0;
+  NucleotideModel nucleotide_model{};
+  RateMixtureView rate_mixture{};
 };
+
+SiteModelView SelectRateCategory(SiteModelView model, std::size_t category);
 
 struct SitePosterior {
   Scalar likelihood = 0.0;
@@ -53,6 +56,7 @@ struct SitePosterior {
   std::vector<Scalar> ancestral_states;
   // [edge, parent nucleotide, child nucleotide].
   std::vector<Scalar> substitutions;
+  std::vector<Scalar> rate_categories;
 };
 
 std::array<Scalar, 16> JukesCantorTransition(Scalar branch_length,

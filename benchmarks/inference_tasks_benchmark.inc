@@ -57,9 +57,13 @@ void TimeTask(const char *backend, const char *task, InferenceTask operation,
               const Options &options, const Problem &problem,
               std::span<const Scalar> uniforms, Reserve &&reserve,
               Evaluate &&evaluate, Compare &&compare) {
+  const BenchmarkEvolutionModel evolution =
+      MakeBenchmarkEvolutionModel(options);
   const AlignmentModelView model{
-      problem.plan, problem.sites, problem.branch_lengths,
-      problem.observation_nodes, problem.observations};
+      problem.plan,           problem.sites,
+      problem.branch_lengths, problem.observation_nodes,
+      problem.observations,   evolution.nucleotide,
+      evolution.rate_view()};
   if (options.site_batch != 0 && options.site_batch < model.sites) {
     throw std::invalid_argument(
         "recovery-task benchmarks require one unchunked site batch");
@@ -124,8 +128,7 @@ void TimeTask(const char *backend, const char *task, InferenceTask operation,
   cpu.Evaluate(model, update, uniforms);
   const auto accelerator_result = evaluate(accelerator, model, update);
   const TaskErrors errors = compare(cpu, accelerator_result);
-  RequireBenchmarkCorrectness(errors.maximum_absolute,
-                              errors.maximum_relative,
+  RequireBenchmarkCorrectness(errors.maximum_absolute, errors.maximum_relative,
                               errors.state_mismatches);
 
   const btrc::PlanStatistics statistics = btrc::Statistics(problem.plan);
@@ -143,7 +146,11 @@ void TimeTask(const char *backend, const char *task, InferenceTask operation,
          "factor-update refreshes numerical factors; fixed-model retains "
          "both. The generic CPU prepared call still copies each dense site "
          "into its scalar workspace.\n"
-      << "backend,precision,benchmark_mode,study,task,dataset,topology,seed_base,"
+      << "backend,precision,benchmark_mode,study,substitution_model,"
+         "substitution_rate,hky_kappa,rate_categories,gamma_shape,task,dataset,"
+         "topology,"
+         "seed_"
+         "base,"
          "seed,replicate,leaves,nodes,sites,unique_patterns,site_batch,"
          "binary_tree,tree_height,sackin_index,colless_index,"
          "normalized_colless,structural_rounds,primitive_levels,"
@@ -154,8 +161,10 @@ void TimeTask(const char *backend, const char *task, InferenceTask operation,
          "cpu_over_accelerator,max_abs_error,max_relative_error,"
          "state_mismatches,cpu_samples_ms,accelerator_samples_ms\n"
       << std::setprecision(10) << backend << ',' << tree_hmm::kPrecisionName
-      << ',' << options.benchmark_mode << ',' << options.study << ',' << task
-      << ',' << problem.dataset
+      << ',' << options.benchmark_mode << ',' << options.study << ','
+      << options.nucleotide_model << ',' << options.substitution_rate << ','
+      << options.hky_kappa << ',' << options.rate_categories << ','
+      << BenchmarkGammaShape(options) << ',' << task << ',' << problem.dataset
       << ',' << problem.topology << ',' << problem.base_seed << ','
       << problem.seed << ',' << problem.replicate << ',' << problem.leaves
       << ',' << problem.plan.num_nodes() << ',' << problem.raw_sites << ','
@@ -204,12 +213,16 @@ void RunOne(const char *backend, const Options &options,
       [](const CpuTaskReference &cpu, AlignmentMaximumView actual) {
         TaskErrors errors = ScalarErrors(cpu.log_values(), actual.log_weights);
         errors.state_mismatches =
-            CountStateMismatches(cpu.states(), actual.states);
+            CountStateMismatches(cpu.states(), actual.states) +
+            CountStateMismatches(cpu.selected_categories(),
+                                 actual.rate_categories);
         return errors;
       });
 
-  std::vector<Scalar> uniforms(problem.sites * problem.plan.num_nodes(),
-                               Scalar{0.5});
+  std::vector<Scalar> uniforms(
+      problem.sites *
+          (problem.plan.num_nodes() + (options.rate_categories > 1 ? 1 : 0)),
+      Scalar{0.5});
   TimeTask(
       backend, "posterior-sample", InferenceTask::kSampling, options, problem,
       uniforms,
@@ -223,7 +236,9 @@ void RunOne(const char *backend, const Options &options,
       [](const CpuTaskReference &cpu, AlignmentPosteriorSampleView actual) {
         TaskErrors errors;
         errors.state_mismatches =
-            CountStateMismatches(cpu.states(), actual.states);
+            CountStateMismatches(cpu.states(), actual.states) +
+            CountStateMismatches(cpu.selected_categories(),
+                                 actual.rate_categories);
         return errors;
       });
 
@@ -241,6 +256,8 @@ void RunOne(const char *backend, const Options &options,
         IncludeScalarErrors(errors, cpu.log_values(), actual.log_likelihoods);
         IncludeScalarErrors(errors, cpu.node_values(), actual.ancestral_states);
         IncludeScalarErrors(errors, cpu.edge_values(), actual.substitutions);
+        IncludeScalarErrors(errors, cpu.category_values(),
+                            actual.rate_categories);
         return errors;
       });
 }

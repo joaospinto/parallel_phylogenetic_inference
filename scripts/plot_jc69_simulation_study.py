@@ -177,9 +177,24 @@ def read_rows(paths: list[Path]) -> list[dict[str, str]]:
                         f"{', '.join(sorted(missing))}"
                     )
                 row["source"] = f"{path}:{line_number}"
+                row.setdefault("substitution_model", "jc69")
+                row.setdefault("substitution_rate", "1")
+                row.setdefault("hky_kappa", "4")
+                row.setdefault("rate_categories", "1")
+                row.setdefault("gamma_shape", "none")
                 if row["sequence_generation"] != "jc69":
                     raise ValueError(
                         f"{row['source']}: JC69 study row is not a JC69 simulation"
+                    )
+                if (
+                    row["substitution_model"] != "jc69"
+                    or row["substitution_rate"] != "1"
+                    or row["rate_categories"] != "1"
+                    or row["gamma_shape"] != "none"
+                ):
+                    raise ValueError(
+                        f"{row['source']}: the JC69 simulation study must be "
+                        "evaluated under single-rate JC69"
                     )
                 result.append(row)
     return result
@@ -369,6 +384,11 @@ def main() -> None:
         native = methods[arguments.native]
         baseline = methods[arguments.baseline]
         for field in (
+            "substitution_model",
+            "substitution_rate",
+            "hky_kappa",
+            "rate_categories",
+            "gamma_shape",
             "nodes",
             "sequence_generation",
             "unique_patterns",

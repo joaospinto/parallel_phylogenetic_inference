@@ -45,21 +45,6 @@ std::size_t CheckedProduct(std::initializer_list<std::size_t> values,
   return result;
 }
 
-void ValidateProbabilities(const std::array<Scalar, 4> &frequencies) {
-  const Scalar sum =
-      std::accumulate(frequencies.begin(), frequencies.end(), Scalar{0});
-  const Scalar probability_tolerance =
-      Scalar{16} * std::numeric_limits<Scalar>::epsilon();
-  if (!std::isfinite(sum) ||
-      std::abs(sum - Scalar{1}) > probability_tolerance ||
-      std::any_of(frequencies.begin(), frequencies.end(), [](Scalar value) {
-        return !std::isfinite(value) || value < 0.0;
-      })) {
-    throw std::invalid_argument(
-        "root frequencies must be finite, nonnegative, and sum to one");
-  }
-}
-
 void ValidateModel(AlignmentModelView model) {
   if (model.branch_lengths.size() != model.plan.num_edges())
     throw std::invalid_argument("one branch length is required per plan edge");
@@ -80,12 +65,8 @@ void ValidateModel(AlignmentModelView model) {
     previous = node;
     first = false;
   }
-  if (!(model.substitution_rate >= 0.0) ||
-      !std::isfinite(model.substitution_rate)) {
-    throw std::invalid_argument(
-        "the substitution rate must be finite and nonnegative");
-  }
-  ValidateProbabilities(model.root_frequencies);
+  static_cast<void>(NucleotideTransition(model.nucleotide_model, 0.0));
+  ValidateRateMixture(model.rate_mixture);
 }
 
 void ValidateWorkspace(AlignmentModelView model,
@@ -102,13 +83,16 @@ void ValidateWorkspace(AlignmentModelView model,
 tree_hmm::BatchedModelView
 FillFactors(AlignmentModelView model,
             tree_hmm::MutableBatchedModelView destination) {
+  if (RateCategoryCount(model.rate_mixture) != 1)
+    throw std::invalid_argument(
+        "dense factor preparation requires one selected rate category");
   std::fill(destination.node_potentials.begin(),
             destination.node_potentials.end(), 1.0f);
   for (std::size_t site = 0; site < model.sites; ++site) {
     Scalar *root = destination.node_potentials.data() +
                    (site * model.plan.num_nodes() + model.plan.root()) * 4;
-    std::transform(model.root_frequencies.begin(), model.root_frequencies.end(),
-                   root,
+    std::transform(model.nucleotide_model.root_frequencies.begin(),
+                   model.nucleotide_model.root_frequencies.end(), root,
                    [](Scalar value) { return static_cast<Scalar>(value); });
     for (std::size_t index = 0; index < model.observation_nodes.size();
          ++index) {
@@ -130,8 +114,8 @@ FillFactors(AlignmentModelView model,
   }
 
   for (std::size_t edge = 0; edge < model.plan.num_edges(); ++edge) {
-    const std::array<Scalar, 16> transition = JukesCantorTransition(
-        model.branch_lengths[edge], model.substitution_rate);
+    const std::array<Scalar, 16> transition = NucleotideTransition(
+        model.nucleotide_model, model.branch_lengths[edge]);
     std::transform(transition.begin(), transition.end(),
                    destination.edge_potentials.begin() + edge * 16,
                    [](Scalar value) { return static_cast<Scalar>(value); });
@@ -154,8 +138,17 @@ AlignmentModelView SelectSites(AlignmentModelView model, std::size_t first_site,
       model.observation_nodes,
       model.observations.subspan(first_site * model.observation_nodes.size(),
                                  site_count * model.observation_nodes.size()),
-      model.root_frequencies,
-      model.substitution_rate};
+      model.nucleotide_model,
+      model.rate_mixture};
+}
+
+AlignmentModelView SelectRateCategory(AlignmentModelView model,
+                                      std::size_t category) {
+  ValidateModel(model);
+  model.nucleotide_model.substitution_rate *=
+      RateCategoryRate(model.rate_mixture, category);
+  model.rate_mixture = {};
+  return model;
 }
 
 AlignmentWorkspace::AlignmentWorkspace() : impl_(std::make_unique<Impl>()) {}
@@ -217,6 +210,9 @@ void PrepareCategoricalShared(
     AlignmentModelView model,
     tree_hmm::MutableBatchedCategoricalModelView destination) {
   ValidateModel(model);
+  if (RateCategoryCount(model.rate_mixture) != 1)
+    throw std::invalid_argument(
+        "categorical factor preparation requires one selected rate category");
   constexpr std::size_t kCategories = 16;
   const std::size_t expected_edges = CheckedProduct(
       {model.plan.num_edges(), std::size_t{16}}, "alignment edge factors");
@@ -232,7 +228,8 @@ void PrepareCategoricalShared(
     throw std::invalid_argument(
         "shared categorical alignment factors do not match the destination");
   }
-  std::transform(model.root_frequencies.begin(), model.root_frequencies.end(),
+  std::transform(model.nucleotide_model.root_frequencies.begin(),
+                 model.nucleotide_model.root_frequencies.end(),
                  destination.root_potential.begin(),
                  [](Scalar value) { return static_cast<Scalar>(value); });
   for (std::size_t category = 0; category < kCategories; ++category) {
@@ -242,8 +239,8 @@ void PrepareCategoricalShared(
     }
   }
   for (std::size_t edge = 0; edge < model.plan.num_edges(); ++edge) {
-    const std::array<Scalar, 16> transition = JukesCantorTransition(
-        model.branch_lengths[edge], model.substitution_rate);
+    const std::array<Scalar, 16> transition = NucleotideTransition(
+        model.nucleotide_model, model.branch_lengths[edge]);
     std::transform(transition.begin(), transition.end(),
                    destination.edge_potentials.begin() + edge * 16,
                    [](Scalar value) { return static_cast<Scalar>(value); });
@@ -324,74 +321,93 @@ std::span<const Scalar> LogLikelihoodsPrepared(AlignmentModelView model,
                                                SequentialWorkspace &workspace) {
   SequentialWorkspace::Impl &storage = *workspace.impl_;
   ValidateWorkspace(model, storage.plan, storage.sites, "SequentialWorkspace");
-  for (std::size_t edge = 0; edge < model.plan.num_edges(); ++edge) {
-    const std::array<Scalar, 16> transition = JukesCantorTransition(
-        model.branch_lengths[edge], model.substitution_rate);
-    std::copy(transition.begin(), transition.end(),
-              storage.transitions.begin() + edge * 16);
-  }
-  std::fill(storage.partials.begin(), storage.partials.end(), 1.0);
-  std::fill(storage.log_scales.begin(), storage.log_scales.end(), 0.0);
-
-  for (std::size_t site = 0; site < model.sites; ++site) {
-    Scalar *site_partials =
-        storage.partials.data() + site * model.plan.num_nodes() * 4;
-    Scalar *root = site_partials + model.plan.root() * 4;
-    std::copy(model.root_frequencies.begin(), model.root_frequencies.end(),
-              root);
-    for (std::size_t index = 0; index < model.observation_nodes.size();
-         ++index) {
-      const btrc::Index node = model.observation_nodes[index];
-      const Nucleotide observation =
-          model.observations[site * model.observation_nodes.size() + index];
-      if (observation == Nucleotide::kUnknown)
-        continue;
-      const std::uint8_t mask = static_cast<std::uint8_t>(observation);
-      if (mask == 0 || mask > static_cast<std::uint8_t>(Nucleotide::kUnknown))
-        throw std::invalid_argument("invalid nucleotide observation");
-      Scalar *factor = site_partials + node * 4;
-      for (int state = 0; state < 4; ++state) {
-        if (!AllowsState(observation, state))
-          factor[state] = 0.0;
-      }
+  std::fill(storage.output.begin(), storage.output.end(),
+            -std::numeric_limits<Scalar>::infinity());
+  const std::size_t categories = RateCategoryCount(model.rate_mixture);
+  for (std::size_t category = 0; category < categories; ++category) {
+    const AlignmentModelView category_model =
+        SelectRateCategory(model, category);
+    for (std::size_t edge = 0; edge < model.plan.num_edges(); ++edge) {
+      const std::array<Scalar, 16> transition = NucleotideTransition(
+          category_model.nucleotide_model, model.branch_lengths[edge]);
+      std::copy(transition.begin(), transition.end(),
+                storage.transitions.begin() + edge * 16);
     }
+    std::fill(storage.partials.begin(), storage.partials.end(), 1.0);
+    std::fill(storage.log_scales.begin(), storage.log_scales.end(), 0.0);
 
-    Scalar *site_scales =
-        storage.log_scales.data() + site * model.plan.num_nodes();
-    for (const btrc::Index node : storage.postorder) {
-      Scalar input_scale = 0.0;
-      Scalar *partial = site_partials + node * 4;
-      for (std::size_t child_index = storage.child_offsets[node];
-           child_index < storage.child_offsets[node + 1]; ++child_index) {
-        const btrc::Index edge = storage.child_edges[child_index];
-        const btrc::Index child = model.plan.edge_children()[edge];
-        const Scalar *child_partial = site_partials + child * 4;
-        const Scalar *transition = storage.transitions.data() + edge * 16;
-        for (std::size_t parent_state = 0; parent_state < 4; ++parent_state) {
-          Scalar message = 0.0;
-          for (std::size_t child_state = 0; child_state < 4; ++child_state) {
-            message += transition[parent_state * 4 + child_state] *
-                       child_partial[child_state];
-          }
-          partial[parent_state] *= message;
+    for (std::size_t site = 0; site < model.sites; ++site) {
+      Scalar *site_partials =
+          storage.partials.data() + site * model.plan.num_nodes() * 4;
+      Scalar *root = site_partials + model.plan.root() * 4;
+      std::transform(model.nucleotide_model.root_frequencies.begin(),
+                     model.nucleotide_model.root_frequencies.end(), root,
+                     [](double value) { return static_cast<Scalar>(value); });
+      for (std::size_t index = 0; index < model.observation_nodes.size();
+           ++index) {
+        const btrc::Index node = model.observation_nodes[index];
+        const Nucleotide observation =
+            model.observations[site * model.observation_nodes.size() + index];
+        if (observation == Nucleotide::kUnknown)
+          continue;
+        const std::uint8_t mask = static_cast<std::uint8_t>(observation);
+        if (mask == 0 || mask > static_cast<std::uint8_t>(Nucleotide::kUnknown))
+          throw std::invalid_argument("invalid nucleotide observation");
+        Scalar *factor = site_partials + node * 4;
+        for (int state = 0; state < 4; ++state) {
+          if (!AllowsState(observation, state))
+            factor[state] = 0.0;
         }
-        input_scale += site_scales[child];
       }
-      const Scalar maximum = *std::max_element(partial, partial + 4);
-      if (maximum > 0.0) {
-        for (std::size_t state = 0; state < 4; ++state)
-          partial[state] /= maximum;
-        site_scales[node] = input_scale + std::log(maximum);
+
+      Scalar *site_scales =
+          storage.log_scales.data() + site * model.plan.num_nodes();
+      for (const btrc::Index node : storage.postorder) {
+        Scalar input_scale = 0.0;
+        Scalar *partial = site_partials + node * 4;
+        for (std::size_t child_index = storage.child_offsets[node];
+             child_index < storage.child_offsets[node + 1]; ++child_index) {
+          const btrc::Index edge = storage.child_edges[child_index];
+          const btrc::Index child = model.plan.edge_children()[edge];
+          const Scalar *child_partial = site_partials + child * 4;
+          const Scalar *transition = storage.transitions.data() + edge * 16;
+          for (std::size_t parent_state = 0; parent_state < 4; ++parent_state) {
+            Scalar message = 0.0;
+            for (std::size_t child_state = 0; child_state < 4; ++child_state) {
+              message += transition[parent_state * 4 + child_state] *
+                         child_partial[child_state];
+            }
+            partial[parent_state] *= message;
+          }
+          input_scale += site_scales[child];
+        }
+        const Scalar maximum = *std::max_element(partial, partial + 4);
+        if (maximum > 0.0) {
+          for (std::size_t state = 0; state < 4; ++state)
+            partial[state] /= maximum;
+          site_scales[node] = input_scale + std::log(maximum);
+        } else {
+          site_scales[node] = -std::numeric_limits<Scalar>::infinity();
+        }
+      }
+      const Scalar *root_partial = site_partials + model.plan.root() * 4;
+      const Scalar root_sum =
+          std::accumulate(root_partial, root_partial + 4, Scalar{0});
+      const Scalar category_log =
+          root_sum > 0.0 ? site_scales[model.plan.root()] + std::log(root_sum)
+                         : -std::numeric_limits<Scalar>::infinity();
+      const Scalar weighted =
+          category_log + static_cast<Scalar>(std::log(
+                             RateCategoryWeight(model.rate_mixture, category)));
+      if (storage.output[site] == -std::numeric_limits<Scalar>::infinity()) {
+        storage.output[site] = weighted;
       } else {
-        site_scales[node] = -std::numeric_limits<Scalar>::infinity();
+        const Scalar maximum = std::max(storage.output[site], weighted);
+        storage.output[site] =
+            maximum + std::log(std::exp(storage.output[site] - maximum) +
+                               std::exp(weighted - maximum));
       }
     }
-    const Scalar *root_partial = site_partials + model.plan.root() * 4;
-    const Scalar root_sum =
-        std::accumulate(root_partial, root_partial + 4, Scalar{0});
-    storage.output[site] =
-        root_sum > 0.0 ? site_scales[model.plan.root()] + std::log(root_sum)
-                       : -std::numeric_limits<Scalar>::infinity();
   }
   return storage.output;
 }

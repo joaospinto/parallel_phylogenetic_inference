@@ -29,7 +29,8 @@ struct BeagleOptions {
 
 int CheckedInt(std::size_t value, const char *description) {
   if (value > static_cast<std::size_t>(std::numeric_limits<int>::max()))
-    throw std::length_error(std::string(description) + " exceeds BEAGLE's limit");
+    throw std::length_error(std::string(description) +
+                            " exceeds BEAGLE's limit");
   return static_cast<int>(value);
 }
 
@@ -46,11 +47,11 @@ BeagleOptions ParseBeagleOptions(int argc, char **argv) {
       if (option == "--beagle-resource") {
         result.resource = argv[index];
         if (result.resource != "cpu" && result.resource != "cuda") {
-          throw std::invalid_argument(
-              "--beagle-resource must be cpu or cuda");
+          throw std::invalid_argument("--beagle-resource must be cpu or cuda");
         }
       } else {
-        const std::size_t threads = ParseSize(argv[index], "BEAGLE thread count");
+        const std::size_t threads =
+            ParseSize(argv[index], "BEAGLE thread count");
         if (threads >
             static_cast<std::size_t>(std::numeric_limits<int>::max())) {
           throw std::invalid_argument("BEAGLE thread count is too large");
@@ -64,9 +65,9 @@ BeagleOptions ParseBeagleOptions(int argc, char **argv) {
       throw std::invalid_argument("missing value for " + std::string(option));
     problem_arguments.push_back(argv[++index]);
   }
-  result.problem = ParseOptions(CheckedInt(problem_arguments.size(),
-                                           "argument count"),
-                                problem_arguments.data());
+  result.problem =
+      ParseOptions(CheckedInt(problem_arguments.size(), "argument count"),
+                   problem_arguments.data());
   return result;
 }
 
@@ -221,13 +222,13 @@ BeagleTree MakeBeagleTree(AlignmentModelView model,
     const btrc::Index second_edge = children[1];
     const btrc::Index first = model.plan.edge_children()[first_edge];
     const btrc::Index second = model.plan.edge_children()[second_edge];
-    int accumulator = children.size() == 2 ? result.node_buffers[node]
-                                           : next_temporary++;
+    int accumulator =
+        children.size() == 2 ? result.node_buffers[node] : next_temporary++;
     result.scale_indices.push_back(next_scale);
     result.operations.push_back(
-        {accumulator, next_scale++, BEAGLE_OP_NONE,
-         result.node_buffers[first], static_cast<int>(first_edge),
-         result.node_buffers[second], static_cast<int>(second_edge)});
+        {accumulator, next_scale++, BEAGLE_OP_NONE, result.node_buffers[first],
+         static_cast<int>(first_edge), result.node_buffers[second],
+         static_cast<int>(second_edge)});
     for (std::size_t index = 2; index < children.size(); ++index) {
       const btrc::Index edge = children[index];
       const btrc::Index child = model.plan.edge_children()[edge];
@@ -235,10 +236,10 @@ BeagleTree MakeBeagleTree(AlignmentModelView model,
                                   ? result.node_buffers[node]
                                   : next_temporary++;
       result.scale_indices.push_back(next_scale);
-      result.operations.push_back(
-          {destination, next_scale++, BEAGLE_OP_NONE, accumulator,
-           CheckedInt(edges, "edge count"), result.node_buffers[child],
-           static_cast<int>(edge)});
+      result.operations.push_back({destination, next_scale++, BEAGLE_OP_NONE,
+                                   accumulator, CheckedInt(edges, "edge count"),
+                                   result.node_buffers[child],
+                                   static_cast<int>(edge)});
       accumulator = destination;
     }
   }
@@ -248,8 +249,8 @@ BeagleTree MakeBeagleTree(AlignmentModelView model,
     throw std::logic_error("failed to construct the BEAGLE postorder");
   }
   result.root_buffer = result.node_buffers[model.plan.root()];
-  result.cumulative_scale = result.operations.empty() ? BEAGLE_OP_NONE
-                                                       : next_scale;
+  result.cumulative_scale =
+      result.operations.empty() ? BEAGLE_OP_NONE : next_scale;
 
   const bool needs_identity = needs_constant || temporary_count != 0;
   result.matrix_indices.resize(edges + (needs_identity ? 1 : 0));
@@ -262,8 +263,7 @@ BeagleTree MakeBeagleTree(AlignmentModelView model,
   for (std::size_t node = 0; node < nodes; ++node) {
     if (!child_edges[node].empty())
       continue;
-    const std::size_t tip =
-        static_cast<std::size_t>(result.node_buffers[node]);
+    const std::size_t tip = static_cast<std::size_t>(result.node_buffers[node]);
     const std::size_t observed = observation_index[node];
     result.tip_observation_indices[tip] = observed;
     const bool compact = compact_observations[observed] != 0;
@@ -296,37 +296,39 @@ public:
                   std::span<const std::uint8_t> compact_observations)
       : tree_(MakeBeagleTree(model, compact_observations)),
         site_values_(model.sites),
-        transition_matrices_(tree_.matrix_indices.size() * 16),
+        rate_categories_(RateCategoryCount(model.rate_mixture)),
+        transition_matrices_(tree_.matrix_indices.size() * rate_categories_ *
+                             16),
         transition_padded_values_(tree_.matrix_indices.size(), 1.0) {
     const bool threaded = resource == "cpu" && threads > 1;
     const long processor = resource == "cpu" ? BEAGLE_FLAG_PROCESSOR_CPU
-                                               : BEAGLE_FLAG_PROCESSOR_GPU;
+                                             : BEAGLE_FLAG_PROCESSOR_GPU;
     const long framework = resource == "cpu" ? BEAGLE_FLAG_FRAMEWORK_CPU
-                                               : BEAGLE_FLAG_FRAMEWORK_CUDA;
-    const long threading = threaded ? BEAGLE_FLAG_THREADING_CPP
-                                    : BEAGLE_FLAG_THREADING_NONE;
-    const long required =
-        PrecisionFlag() | BEAGLE_FLAG_COMPUTATION_SYNCH |
-        BEAGLE_FLAG_EIGEN_REAL | BEAGLE_FLAG_SCALING_MANUAL |
-        BEAGLE_FLAG_SCALERS_LOG | processor | framework | threading;
+                                             : BEAGLE_FLAG_FRAMEWORK_CUDA;
+    const long threading =
+        threaded ? BEAGLE_FLAG_THREADING_CPP : BEAGLE_FLAG_THREADING_NONE;
+    const long required = PrecisionFlag() | BEAGLE_FLAG_COMPUTATION_SYNCH |
+                          BEAGLE_FLAG_EIGEN_REAL | BEAGLE_FLAG_SCALING_MANUAL |
+                          BEAGLE_FLAG_SCALERS_LOG | processor | framework |
+                          threading;
     BeagleInstanceDetails details{};
     const int compact_buffer_count = CheckedInt(
         static_cast<std::size_t>(std::count(tree_.compact_tip.begin(),
-                                           tree_.compact_tip.end(), true)),
+                                            tree_.compact_tip.end(), true)),
         "compact tip count");
     const int partials_buffer_count =
         tree_.partials_buffer_count - compact_buffer_count;
     instance_ = std::make_unique<BeagleInstance>(beagleCreateInstance(
         tree_.tip_count, partials_buffer_count, compact_buffer_count, 4,
         CheckedInt(model.sites, "site count"), 1,
-        CheckedInt(tree_.matrix_indices.size(), "matrix count"), 1,
+        CheckedInt(tree_.matrix_indices.size(), "matrix count"),
+        CheckedInt(rate_categories_, "rate category count"),
         tree_.operations.empty()
             ? 0
             : CheckedInt(tree_.operations.size() + 1, "scale count"),
-        nullptr, 0,
-        required, required, &details));
-    resource_name_ = details.resourceName == nullptr ? "unknown"
-                                                     : details.resourceName;
+        nullptr, 0, required, required, &details));
+    resource_name_ =
+        details.resourceName == nullptr ? "unknown" : details.resourceName;
     implementation_name_ =
         details.implName == nullptr ? "unknown" : details.implName;
     implementation_flags_ = details.flags;
@@ -358,37 +360,47 @@ public:
         tree_.matrix_indices.size() != model.branch_lengths.size() + 1) {
       throw std::invalid_argument("BEAGLE branch-factor shape changed");
     }
-    constexpr std::array<double, 1> kCategoryRates{1.0};
-    constexpr std::array<double, 1> kCategoryWeights{1.0};
+    if (RateCategoryCount(model.rate_mixture) != rate_categories_)
+      throw std::invalid_argument("BEAGLE rate-category shape changed");
+    std::vector<double> category_rates(rate_categories_, 1.0);
+    std::vector<double> category_weights(rate_categories_);
+    for (std::size_t category = 0; category < rate_categories_; ++category) {
+      category_weights[category] =
+          RateCategoryWeight(model.rate_mixture, category);
+    }
     std::array<double, 4> frequencies{};
     for (std::size_t state = 0; state < frequencies.size(); ++state)
-      frequencies[state] = static_cast<double>(model.root_frequencies[state]);
-    CheckBeagle(beagleSetStateFrequencies(instance_->get(), 0,
-                                          frequencies.data()),
-                "beagleSetStateFrequencies");
-    CheckBeagle(beagleSetCategoryRates(instance_->get(),
-                                       kCategoryRates.data()),
+      frequencies[state] = model.nucleotide_model.root_frequencies[state];
+    CheckBeagle(
+        beagleSetStateFrequencies(instance_->get(), 0, frequencies.data()),
+        "beagleSetStateFrequencies");
+    CheckBeagle(beagleSetCategoryRates(instance_->get(), category_rates.data()),
                 "beagleSetCategoryRates");
-    CheckBeagle(beagleSetCategoryWeights(instance_->get(), 0,
-                                         kCategoryWeights.data()),
-                "beagleSetCategoryWeights");
+    CheckBeagle(
+        beagleSetCategoryWeights(instance_->get(), 0, category_weights.data()),
+        "beagleSetCategoryWeights");
     const auto set_transition = [&](std::size_t matrix, Scalar branch_length) {
-      const std::array<Scalar, 16> transition =
-          JukesCantorTransition(branch_length, model.substitution_rate);
-      std::transform(transition.begin(), transition.end(),
-                     transition_matrices_.begin() + matrix * 16,
-                     [](Scalar value) { return static_cast<double>(value); });
+      for (std::size_t category = 0; category < rate_categories_; ++category) {
+        const AlignmentModelView category_model =
+            SelectRateCategory(model, category);
+        const std::array<Scalar, 16> transition = NucleotideTransition(
+            category_model.nucleotide_model, branch_length);
+        std::transform(transition.begin(), transition.end(),
+                       transition_matrices_.begin() +
+                           (matrix * rate_categories_ + category) * 16,
+                       [](Scalar value) { return static_cast<double>(value); });
+      }
     };
     for (std::size_t edge = 0; edge < model.branch_lengths.size(); ++edge)
       set_transition(edge, model.branch_lengths[edge]);
     if (tree_.matrix_indices.size() > model.branch_lengths.size())
       set_transition(model.branch_lengths.size(), Scalar{0});
-    CheckBeagle(
-        beagleSetTransitionMatrices(
-            instance_->get(), tree_.matrix_indices.data(),
-            transition_matrices_.data(), transition_padded_values_.data(),
-            CheckedInt(tree_.matrix_indices.size(), "matrix count")),
-        "beagleSetTransitionMatrices");
+    CheckBeagle(beagleSetTransitionMatrices(
+                    instance_->get(), tree_.matrix_indices.data(),
+                    transition_matrices_.data(),
+                    transition_padded_values_.data(),
+                    CheckedInt(tree_.matrix_indices.size(), "matrix count")),
+                "beagleSetTransitionMatrices");
     return Milliseconds(begin, Clock::now());
   }
 
@@ -404,9 +416,9 @@ public:
                     BEAGLE_OP_NONE),
                 "beagleUpdatePartials");
     if (!tree_.operations.empty()) {
-      CheckBeagle(beagleResetScaleFactors(instance_->get(),
-                                          tree_.cumulative_scale),
-                  "beagleResetScaleFactors");
+      CheckBeagle(
+          beagleResetScaleFactors(instance_->get(), tree_.cumulative_scale),
+          "beagleResetScaleFactors");
       CheckBeagle(beagleAccumulateScaleFactors(
                       instance_->get(), tree_.scale_indices.data(),
                       CheckedInt(tree_.scale_indices.size(), "scale count"),
@@ -420,9 +432,9 @@ public:
                     &state_frequencies, &tree_.cumulative_scale, 1,
                     &log_likelihood_),
                 "beagleCalculateRootLogLikelihoods");
-    CheckBeagle(beagleGetSiteLogLikelihoods(instance_->get(),
-                                            site_values_.data()),
-                "beagleGetSiteLogLikelihoods");
+    CheckBeagle(
+        beagleGetSiteLogLikelihoods(instance_->get(), site_values_.data()),
+        "beagleGetSiteLogLikelihoods");
     const Clock::time_point total_end = Clock::now();
     return {Milliseconds(total_begin, tip_end),
             Milliseconds(tip_end, total_end),
@@ -431,7 +443,9 @@ public:
 
   std::span<const double> site_values() const { return site_values_; }
   const std::string &resource_name() const { return resource_name_; }
-  const std::string &implementation_name() const { return implementation_name_; }
+  const std::string &implementation_name() const {
+    return implementation_name_;
+  }
   long implementation_flags() const { return implementation_flags_; }
   std::size_t compact_tip_count() const {
     return static_cast<std::size_t>(
@@ -456,14 +470,14 @@ private:
           const std::uint8_t mask = static_cast<std::uint8_t>(
               model.observations[site * model.observation_nodes.size() +
                                  observed]);
-          states[site] = mask == 0b1111 ? 4
-                       : mask == 0b0001 ? 0
-                       : mask == 0b0010 ? 1
-                       : mask == 0b0100 ? 2
-                                        : 3;
+          states[site] = mask == 0b1111   ? 4
+                         : mask == 0b0001 ? 0
+                         : mask == 0b0010 ? 1
+                         : mask == 0b0100 ? 2
+                                          : 3;
         }
-        CheckBeagle(beagleSetTipStates(instance_->get(),
-                                       static_cast<int>(tip), states.data()),
+        CheckBeagle(beagleSetTipStates(instance_->get(), static_cast<int>(tip),
+                                       states.data()),
                     "beagleSetTipStates");
       } else {
         std::vector<double> &partials = tree_.tip_partials[tip];
@@ -477,7 +491,8 @@ private:
           }
         }
         CheckBeagle(beagleSetTipPartials(instance_->get(),
-                                         static_cast<int>(tip), partials.data()),
+                                         static_cast<int>(tip),
+                                         partials.data()),
                     "beagleSetTipPartials");
       }
     }
@@ -485,6 +500,7 @@ private:
 
   BeagleTree tree_;
   std::vector<double> site_values_;
+  std::size_t rate_categories_ = 1;
   std::vector<double> transition_matrices_;
   std::vector<double> transition_padded_values_;
   std::unique_ptr<BeagleInstance> instance_;
@@ -518,9 +534,7 @@ double BeagleMaxRelativeError(std::span<const Scalar> expected,
     if (!std::isfinite(reference) || !std::isfinite(actual[index]))
       return std::numeric_limits<double>::infinity();
     const double error = std::abs(reference - actual[index]);
-    result = std::max(
-        result,
-        error / std::max(1.0, std::abs(reference)));
+    result = std::max(result, error / std::max(1.0, std::abs(reference)));
   }
   return result;
 }
@@ -532,166 +546,163 @@ namespace parallel_phylogenetics::benchmark {
 namespace {
 
 void RunOne(const BeagleOptions &options, std::size_t replicate) {
-    const Problem problem = MakeProblem(options.problem, replicate);
-    const AlignmentModelView model{
-        problem.plan, problem.sites, problem.branch_lengths,
-        problem.observation_nodes, problem.observations};
-    const std::size_t site_batch =
-        options.problem.site_batch == 0
-            ? problem.sites
-            : std::min(options.problem.site_batch, problem.sites);
-    const std::size_t remainder = problem.sites % site_batch;
-    const std::size_t cpu_site_batch = CpuReferenceSiteBatch(model);
-    const std::size_t cpu_remainder = problem.sites % cpu_site_batch;
-    const bool update_factors =
-        options.problem.benchmark_mode != "fixed-model";
-    const bool update_inputs =
-        options.problem.benchmark_mode == "full-input-update";
-    const bool allow_compact_tips =
-        options.resource != "cpu" ||
-        (!update_inputs && site_batch == model.sites &&
-         options.problem.conditioning_ms == 0);
-    std::vector<std::uint8_t> compact_observations(
-        model.observation_nodes.size(), allow_compact_tips);
-    for (std::size_t observed = 0; observed < model.observation_nodes.size();
-         ++observed) {
-      for (std::size_t site = 0;
-           compact_observations[observed] != 0 && site < model.sites; ++site) {
-        const std::uint8_t mask = static_cast<std::uint8_t>(
-            model.observations[site * model.observation_nodes.size() +
-                               observed]);
-        compact_observations[observed] =
-            mask == 0b0001 || mask == 0b0010 || mask == 0b0100 ||
-            mask == 0b1000 || mask == 0b1111;
-      }
+  const Problem problem = MakeProblem(options.problem, replicate);
+  const BenchmarkEvolutionModel evolution =
+      MakeBenchmarkEvolutionModel(options.problem);
+  const AlignmentModelView model{
+      problem.plan,           problem.sites,
+      problem.branch_lengths, problem.observation_nodes,
+      problem.observations,   evolution.nucleotide,
+      evolution.rate_view()};
+  const std::size_t site_batch =
+      options.problem.site_batch == 0
+          ? problem.sites
+          : std::min(options.problem.site_batch, problem.sites);
+  const std::size_t remainder = problem.sites % site_batch;
+  const std::size_t cpu_site_batch = CpuReferenceSiteBatch(model);
+  const std::size_t cpu_remainder = problem.sites % cpu_site_batch;
+  const bool update_factors = options.problem.benchmark_mode != "fixed-model";
+  const bool update_inputs =
+      options.problem.benchmark_mode == "full-input-update";
+  const bool allow_compact_tips =
+      options.resource != "cpu" ||
+      (!update_inputs && site_batch == model.sites &&
+       options.problem.conditioning_ms == 0);
+  std::vector<std::uint8_t> compact_observations(model.observation_nodes.size(),
+                                                 allow_compact_tips);
+  for (std::size_t observed = 0; observed < model.observation_nodes.size();
+       ++observed) {
+    for (std::size_t site = 0;
+         compact_observations[observed] != 0 && site < model.sites; ++site) {
+      const std::uint8_t mask = static_cast<std::uint8_t>(
+          model.observations[site * model.observation_nodes.size() + observed]);
+      compact_observations[observed] = mask == 0b0001 || mask == 0b0010 ||
+                                       mask == 0b0100 || mask == 0b1000 ||
+                                       mask == 0b1111;
     }
-    const AlignmentModelView first = SiteBatch(model, 0, site_batch);
-    SequentialWorkspace full_sequential;
-    full_sequential.Reserve(problem.plan, cpu_site_batch);
-    BeagleWorkspace full_beagle(first, options.resource, options.threads,
-                                compact_observations);
-    std::unique_ptr<SequentialWorkspace> tail_sequential;
-    std::unique_ptr<BeagleWorkspace> tail_beagle;
-    if (cpu_remainder != 0) {
-      tail_sequential = std::make_unique<SequentialWorkspace>();
-      tail_sequential->Reserve(problem.plan, cpu_remainder);
-    }
-    if (remainder != 0) {
-      const AlignmentModelView tail =
-          SiteBatch(model, problem.sites - remainder, remainder);
-      tail_beagle = std::make_unique<BeagleWorkspace>(
-          tail, options.resource, options.threads, compact_observations);
-    }
+  }
+  const AlignmentModelView first = SiteBatch(model, 0, site_batch);
+  SequentialWorkspace full_sequential;
+  full_sequential.Reserve(problem.plan, cpu_site_batch);
+  BeagleWorkspace full_beagle(first, options.resource, options.threads,
+                              compact_observations);
+  std::unique_ptr<SequentialWorkspace> tail_sequential;
+  std::unique_ptr<BeagleWorkspace> tail_beagle;
+  if (cpu_remainder != 0) {
+    tail_sequential = std::make_unique<SequentialWorkspace>();
+    tail_sequential->Reserve(problem.plan, cpu_remainder);
+  }
+  if (remainder != 0) {
+    const AlignmentModelView tail =
+        SiteBatch(model, problem.sites - remainder, remainder);
+    tail_beagle = std::make_unique<BeagleWorkspace>(
+        tail, options.resource, options.threads, compact_observations);
+  }
 
-    std::vector<double> sequential_times(options.problem.repeats, 0.0);
-    std::vector<double> tip_times(options.problem.repeats, 0.0);
-    std::vector<double> factor_times(options.problem.repeats, 0.0);
-    std::vector<double> pruning_times(options.problem.repeats, 0.0);
-    std::vector<double> total_times(options.problem.repeats, 0.0);
-    std::vector<Scalar> sequential_values(problem.sites);
-    std::vector<double> beagle_values(problem.sites);
-    const auto run_sequential_complete = [&] {
-      const Clock::time_point begin = Clock::now();
-      for (std::size_t first_site = 0; first_site < model.sites;
-           first_site += cpu_site_batch) {
-        const std::size_t count =
-            std::min(cpu_site_batch, model.sites - first_site);
-        const AlignmentModelView batch = SiteBatch(model, first_site, count);
-        SequentialWorkspace &workspace =
-            count == cpu_site_batch ? full_sequential : *tail_sequential;
-        const auto values = LogLikelihoodsPrepared(batch, workspace);
-        std::copy(values.begin(), values.end(),
-                  sequential_values.begin() + first_site);
-      }
-      return Milliseconds(begin, Clock::now());
-    };
-    const auto condition_sequential = [&] {
-      static_cast<void>(run_sequential_complete());
-    };
-    const auto condition_beagle = [&] {
-      static_cast<void>(full_beagle.UpdateFactors(first));
-      if (tail_beagle != nullptr) {
-        static_cast<void>(tail_beagle->UpdateFactors(
-            SiteBatch(model, model.sites - remainder, remainder)));
-      }
-      for (std::size_t first_site = 0; first_site < model.sites;
-           first_site += site_batch) {
-        const std::size_t count =
-            std::min(site_batch, model.sites - first_site);
-        const AlignmentModelView batch = SiteBatch(model, first_site, count);
-        BeagleWorkspace &workspace =
-            count == site_batch ? full_beagle : *tail_beagle;
-        static_cast<void>(workspace.Evaluate(batch, true));
-      }
-    };
-    ConditionInterleaved(options.problem.conditioning_ms,
-                         condition_sequential, condition_beagle);
+  std::vector<double> sequential_times(options.problem.repeats, 0.0);
+  std::vector<double> tip_times(options.problem.repeats, 0.0);
+  std::vector<double> factor_times(options.problem.repeats, 0.0);
+  std::vector<double> pruning_times(options.problem.repeats, 0.0);
+  std::vector<double> total_times(options.problem.repeats, 0.0);
+  std::vector<Scalar> sequential_values(problem.sites);
+  std::vector<double> beagle_values(problem.sites);
+  const auto run_sequential_complete = [&] {
+    const Clock::time_point begin = Clock::now();
+    for (std::size_t first_site = 0; first_site < model.sites;
+         first_site += cpu_site_batch) {
+      const std::size_t count =
+          std::min(cpu_site_batch, model.sites - first_site);
+      const AlignmentModelView batch = SiteBatch(model, first_site, count);
+      SequentialWorkspace &workspace =
+          count == cpu_site_batch ? full_sequential : *tail_sequential;
+      const auto values = LogLikelihoodsPrepared(batch, workspace);
+      std::copy(values.begin(), values.end(),
+                sequential_values.begin() + first_site);
+    }
+    return Milliseconds(begin, Clock::now());
+  };
+  const auto condition_sequential = [&] {
+    static_cast<void>(run_sequential_complete());
+  };
+  const auto condition_beagle = [&] {
+    static_cast<void>(full_beagle.UpdateFactors(first));
+    if (tail_beagle != nullptr) {
+      static_cast<void>(tail_beagle->UpdateFactors(
+          SiteBatch(model, model.sites - remainder, remainder)));
+    }
+    for (std::size_t first_site = 0; first_site < model.sites;
+         first_site += site_batch) {
+      const std::size_t count = std::min(site_batch, model.sites - first_site);
+      const AlignmentModelView batch = SiteBatch(model, first_site, count);
+      BeagleWorkspace &workspace =
+          count == site_batch ? full_beagle : *tail_beagle;
+      static_cast<void>(workspace.Evaluate(batch, true));
+    }
+  };
+  ConditionInterleaved(options.problem.conditioning_ms, condition_sequential,
+                       condition_beagle);
 
-    double initial_staging_ms = 0.0;
-    if (update_inputs) {
-      // Match the native full-input benchmark's unconditional first-use
-      // warmup, including the complete alignment when it spans chunks.
-      static_cast<void>(run_sequential_complete());
-      static_cast<void>(full_beagle.UpdateFactors(first));
-      if (tail_beagle != nullptr) {
-        static_cast<void>(tail_beagle->UpdateFactors(
-            SiteBatch(model, model.sites - remainder, remainder)));
-      }
-      for (std::size_t first_site = 0; first_site < model.sites;
-           first_site += site_batch) {
-        const std::size_t count =
-            std::min(site_batch, model.sites - first_site);
-        const AlignmentModelView batch = SiteBatch(model, first_site, count);
-        BeagleWorkspace &workspace =
-            count == site_batch ? full_beagle : *tail_beagle;
-        static_cast<void>(workspace.Evaluate(batch, true));
-      }
-      for (int repeat = 0; repeat < options.problem.repeats; ++repeat) {
-        const auto run_sequential = [&] {
-          sequential_times[repeat] += run_sequential_complete();
-        };
-        const auto run_beagle = [&] {
-          const Clock::time_point total_begin = Clock::now();
-          factor_times[repeat] += full_beagle.UpdateFactors(first);
-          if (tail_beagle != nullptr) {
-            factor_times[repeat] += tail_beagle->UpdateFactors(
-                SiteBatch(model, model.sites - remainder, remainder));
-          }
-          for (std::size_t first_site = 0; first_site < model.sites;
-               first_site += site_batch) {
-            const std::size_t count =
-                std::min(site_batch, model.sites - first_site);
-            const AlignmentModelView batch =
-                SiteBatch(model, first_site, count);
-            BeagleWorkspace &workspace =
-                count == site_batch ? full_beagle : *tail_beagle;
-            const BeagleEvaluation result =
-                workspace.Evaluate(batch, true);
-            tip_times[repeat] += result.tip_ms;
-            pruning_times[repeat] += result.pruning_ms;
-            const std::span<const double> values = workspace.site_values();
-            std::copy(values.begin(), values.end(),
-                      beagle_values.begin() + first_site);
-          }
-          total_times[repeat] += Milliseconds(total_begin, Clock::now());
-        };
-        if (repeat % 2 == 0) {
-          run_sequential();
-          run_beagle();
-        } else {
-          run_beagle();
-          run_sequential();
+  double initial_staging_ms = 0.0;
+  if (update_inputs) {
+    // Match the native full-input benchmark's unconditional first-use
+    // warmup, including the complete alignment when it spans chunks.
+    static_cast<void>(run_sequential_complete());
+    static_cast<void>(full_beagle.UpdateFactors(first));
+    if (tail_beagle != nullptr) {
+      static_cast<void>(tail_beagle->UpdateFactors(
+          SiteBatch(model, model.sites - remainder, remainder)));
+    }
+    for (std::size_t first_site = 0; first_site < model.sites;
+         first_site += site_batch) {
+      const std::size_t count = std::min(site_batch, model.sites - first_site);
+      const AlignmentModelView batch = SiteBatch(model, first_site, count);
+      BeagleWorkspace &workspace =
+          count == site_batch ? full_beagle : *tail_beagle;
+      static_cast<void>(workspace.Evaluate(batch, true));
+    }
+    for (int repeat = 0; repeat < options.problem.repeats; ++repeat) {
+      const auto run_sequential = [&] {
+        sequential_times[repeat] += run_sequential_complete();
+      };
+      const auto run_beagle = [&] {
+        const Clock::time_point total_begin = Clock::now();
+        factor_times[repeat] += full_beagle.UpdateFactors(first);
+        if (tail_beagle != nullptr) {
+          factor_times[repeat] += tail_beagle->UpdateFactors(
+              SiteBatch(model, model.sites - remainder, remainder));
         }
+        for (std::size_t first_site = 0; first_site < model.sites;
+             first_site += site_batch) {
+          const std::size_t count =
+              std::min(site_batch, model.sites - first_site);
+          const AlignmentModelView batch = SiteBatch(model, first_site, count);
+          BeagleWorkspace &workspace =
+              count == site_batch ? full_beagle : *tail_beagle;
+          const BeagleEvaluation result = workspace.Evaluate(batch, true);
+          tip_times[repeat] += result.tip_ms;
+          pruning_times[repeat] += result.pruning_ms;
+          const std::span<const double> values = workspace.site_values();
+          std::copy(values.begin(), values.end(),
+                    beagle_values.begin() + first_site);
+        }
+        total_times[repeat] += Milliseconds(total_begin, Clock::now());
+      };
+      if (repeat % 2 == 0) {
+        run_sequential();
+        run_beagle();
+      } else {
+        run_beagle();
+        run_sequential();
       }
-    } else {
+    }
+  } else {
     static_cast<void>(run_sequential_complete());
     for (int repeat = 0; repeat < options.problem.repeats; ++repeat)
       sequential_times[repeat] = run_sequential_complete();
     std::size_t chunk_index = 0;
     for (std::size_t first_site = 0; first_site < model.sites;
          first_site += site_batch, ++chunk_index) {
-      const std::size_t count =
-          std::min(site_batch, model.sites - first_site);
+      const std::size_t count = std::min(site_batch, model.sites - first_site);
       const AlignmentModelView batch = SiteBatch(model, first_site, count);
       BeagleWorkspace &beagle_workspace =
           count == site_batch ? full_beagle : *tail_beagle;
@@ -718,153 +729,153 @@ void RunOne(const BeagleOptions &options, std::size_t replicate) {
         run_beagle();
       }
     }
-    }
+  }
 
-    const double sequential_ms = Median(sequential_times);
-    const double beagle_tip_ms = Median(tip_times);
-    const double beagle_factor_ms = Median(factor_times);
-    const double beagle_pruning_ms = Median(pruning_times);
-    const double beagle_total_ms = Median(total_times);
-    const double absolute_error = BeagleMaxAbsoluteError(
-        std::span<const Scalar>(sequential_values),
-        std::span<const double>(beagle_values));
-    const double relative_error = BeagleMaxRelativeError(
-        std::span<const Scalar>(sequential_values),
-        std::span<const double>(beagle_values));
-    RequireBenchmarkCorrectness(absolute_error, relative_error);
-    double sequential_log_likelihood = 0.0;
-    double beagle_log_likelihood = 0.0;
-    for (std::size_t pattern = 0; pattern < problem.sites; ++pattern) {
-      sequential_log_likelihood +=
-          static_cast<double>(problem.pattern_weights[pattern]) *
-          static_cast<double>(sequential_values[pattern]);
-      beagle_log_likelihood +=
-          static_cast<double>(problem.pattern_weights[pattern]) *
-          beagle_values[pattern];
-    }
-    const btrc::PlanStatistics statistics = btrc::Statistics(problem.plan);
-    std::cout << "# baseline=BEAGLE " << beagleGetVersion() << '\n'
-              << "# precision=" << tree_hmm::kPrecisionName << '\n'
-              << "# resource=" << full_beagle.resource_name() << '\n'
-              << "# implementation=" << full_beagle.implementation_name()
-              << '\n'
-              << "# implementation_flags="
-              << full_beagle.implementation_flags()
-              << '\n'
-              << "# compact_tip_count=" << full_beagle.compact_tip_count()
-              << '\n'
-              << "# partial_tip_count=" << full_beagle.partial_tip_count()
-              << '\n'
-              << "# repeated fixed-topology evaluations exclude instance, "
-                 "workspace, and topology setup; benchmark_mode determines "
-                 "which numerical inputs are refreshed\n"
-              << "# benchmark_mode=" << options.problem.benchmark_mode << '\n'
-              << "# study=" << options.problem.study << '\n'
-              << "# sequence_generation=" << problem.sequence_generation
-              << '\n'
-              << "# topological_height_edges=" << problem.shape.height
-              << '\n';
-    if (problem.evolutionary_root_to_tip_distance.has_value()) {
-      std::cout << "# evolutionary_root_to_tip_distance="
-                << *problem.evolutionary_root_to_tip_distance << '\n';
-    }
-    std::cout
-              << "# minimum_branch_length=" << problem.minimum_branch_length
-              << '\n'
-              << "# floored_branch_count=" << problem.floored_branch_count
-              << '\n'
-              << "# timing_beagle_total=host wall time for the input updates "
-                 "selected by benchmark_mode, pruning, scaling, root "
-                 "integration, and per-pattern likelihood retrieval\n"
-              << "# timed_output=per-unique-pattern log likelihoods; pattern "
-                 "multiplicities are fixed to one inside BEAGLE and the "
-                 "empirical multiplicities are applied outside timing for "
-                 "both implementations\n"
-              << "# transition_matrices=the native stable closed-form JC69 "
-                 "routine constructs matrices in the configured precision; "
-                 "they are copied to BEAGLE's double-valued public input and "
-                 "uploaded through "
-                 "beagleSetTransitionMatrices; construction and upload are "
-                 "included whenever factors are timed\n"
-              << "# warmup=all modes execute one untimed evaluation before "
-                 "measurement; this is not included in initial_staging_ms\n"
-              << "# timing_initial_staging=one untimed full-input evaluation "
-                 "per exact site chunk for resident modes; reported "
-                 "separately and excluded from beagle_total_ms\n"
-              << "# measurement_scope="
-              << (update_inputs || site_batch == problem.sites
-                      ? "complete-alignment-wall-time"
-                      : "sum-of-per-chunk-resident-calls")
-              << '\n'
-              << "# resident_chunking=factor-update and fixed-model stage "
-                 "and measure each exact chunk before reusing its workspace; "
-                 "their totals are projections unless site_batch equals the "
-                 "number of unique patterns\n"
-              << "# factor_projection=for multiple chunks, factor-update "
-                 "sums one factor refresh per resident chunk; it does not "
-                 "estimate a scheme sharing one refreshed factor copy across "
-                 "all chunks\n"
-              << "# conventional_cpu_reference=full evaluation with an "
-                 "independently memory-bounded workspace; it is not a mode-matched "
-                 "resident implementation\n"
-              << "baseline,beagle_resource,precision,benchmark_mode,study,dataset,topology,"
-                 "sequence_generation,evolutionary_root_to_tip_distance,minimum_branch_length,floored_branch_count,"
-                 "seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,"
-                 "site_batch,cpu_reference_site_batch,binary_tree,tree_height,"
-                 "sackin_index,colless_index,"
-                 "normalized_colless,structural_rounds,primitive_levels,"
-                 "primitive_operations,planning_ms,repeats,"
-                 "conditioning_ms,threads,beagle_resource_name,"
-                 "beagle_implementation,beagle_implementation_flags,"
-                 "compact_tip_count,partial_tip_count,"
-                 "sequential_ms,beagle_input_ms,beagle_factor_ms,"
-                 "beagle_pruning_ms,beagle_total_ms,initial_staging_ms,"
-                 "conventional_full_cpu_over_beagle,"
-                 "sequential_log_likelihood,beagle_log_likelihood,"
-                 "max_abs_error,max_relative_error,sequential_samples_ms,"
-                 "beagle_input_samples_ms,beagle_factor_samples_ms,"
-                 "beagle_pruning_samples_ms,beagle_total_samples_ms\n"
-              << std::setprecision(10) << "beagle," << options.resource << ','
-              << tree_hmm::kPrecisionName << ','
-              << options.problem.benchmark_mode << ',' << options.problem.study
-              << ','
-              << problem.dataset << ','
-              << problem.topology << ',' << problem.sequence_generation << ',';
-    if (problem.evolutionary_root_to_tip_distance.has_value())
-      std::cout << *problem.evolutionary_root_to_tip_distance;
-    std::cout << ',' << problem.minimum_branch_length << ','
-              << problem.floored_branch_count << ',' << problem.base_seed << ','
-              << problem.seed << ',' << problem.replicate << ','
-              << problem.leaves << ',' << problem.plan.num_nodes() << ','
-              << problem.raw_sites << ',' << problem.sites << ',' << site_batch
-              << ',' << cpu_site_batch << ','
-              << (problem.shape.binary ? 1 : 0) << ','
-              << problem.shape.height << ',' << problem.shape.sackin << ','
-              << problem.shape.colless << ','
-              << problem.shape.normalized_colless << ',' << statistics.rounds
-              << ',' << statistics.primitive_levels << ','
-              << statistics.rakes + problem.plan.num_branch_combinations() +
-                     problem.plan.num_branch_absorptions() +
-                     statistics.compressions
-              << ',' << problem.planning_ms << ','
-              << options.problem.repeats << ','
-              << options.problem.conditioning_ms << ',' << options.threads
-              << ',' << full_beagle.resource_name() << ','
-              << full_beagle.implementation_name() << ','
-              << full_beagle.implementation_flags() << ','
-              << full_beagle.compact_tip_count() << ','
-              << full_beagle.partial_tip_count() << ',' << sequential_ms
-              << ',' << beagle_tip_ms << ',' << beagle_factor_ms << ','
-              << beagle_pruning_ms << ','
-              << beagle_total_ms << ',' << initial_staging_ms << ','
-              << sequential_ms / beagle_total_ms << ','
-              << sequential_log_likelihood << ','
-              << beagle_log_likelihood << ',' << absolute_error << ','
-              << relative_error << ',' << JoinSamples(sequential_times) << ','
-              << JoinSamples(tip_times) << ','
-              << JoinSamples(factor_times) << ','
-              << JoinSamples(pruning_times) << ','
-              << JoinSamples(total_times) << '\n';
+  const double sequential_ms = Median(sequential_times);
+  const double beagle_tip_ms = Median(tip_times);
+  const double beagle_factor_ms = Median(factor_times);
+  const double beagle_pruning_ms = Median(pruning_times);
+  const double beagle_total_ms = Median(total_times);
+  const double absolute_error =
+      BeagleMaxAbsoluteError(std::span<const Scalar>(sequential_values),
+                             std::span<const double>(beagle_values));
+  const double relative_error =
+      BeagleMaxRelativeError(std::span<const Scalar>(sequential_values),
+                             std::span<const double>(beagle_values));
+  RequireBenchmarkCorrectness(absolute_error, relative_error);
+  double sequential_log_likelihood = 0.0;
+  double beagle_log_likelihood = 0.0;
+  for (std::size_t pattern = 0; pattern < problem.sites; ++pattern) {
+    sequential_log_likelihood +=
+        static_cast<double>(problem.pattern_weights[pattern]) *
+        static_cast<double>(sequential_values[pattern]);
+    beagle_log_likelihood +=
+        static_cast<double>(problem.pattern_weights[pattern]) *
+        beagle_values[pattern];
+  }
+  const btrc::PlanStatistics statistics = btrc::Statistics(problem.plan);
+  std::cout << "# baseline=BEAGLE " << beagleGetVersion() << '\n'
+            << "# precision=" << tree_hmm::kPrecisionName << '\n'
+            << "# resource=" << full_beagle.resource_name() << '\n'
+            << "# implementation=" << full_beagle.implementation_name() << '\n'
+            << "# implementation_flags=" << full_beagle.implementation_flags()
+            << '\n'
+            << "# compact_tip_count=" << full_beagle.compact_tip_count() << '\n'
+            << "# partial_tip_count=" << full_beagle.partial_tip_count() << '\n'
+            << "# repeated fixed-topology evaluations exclude instance, "
+               "workspace, and topology setup; benchmark_mode determines "
+               "which numerical inputs are refreshed\n"
+            << "# benchmark_mode=" << options.problem.benchmark_mode << '\n'
+            << "# study=" << options.problem.study << '\n'
+            << "# sequence_generation=" << problem.sequence_generation << '\n'
+            << "# substitution_model=" << options.problem.nucleotide_model
+            << '\n'
+            << "# substitution_rate=" << options.problem.substitution_rate
+            << '\n'
+            << "# hky_kappa=" << options.problem.hky_kappa << '\n'
+            << "# rate_categories=" << options.problem.rate_categories << '\n'
+            << "# gamma_shape=" << BenchmarkGammaShape(options.problem) << '\n'
+            << "# topological_height_edges=" << problem.shape.height << '\n';
+  if (problem.evolutionary_root_to_tip_distance.has_value()) {
+    std::cout << "# evolutionary_root_to_tip_distance="
+              << *problem.evolutionary_root_to_tip_distance << '\n';
+  }
+  std::cout
+      << "# minimum_branch_length=" << problem.minimum_branch_length << '\n'
+      << "# floored_branch_count=" << problem.floored_branch_count << '\n'
+      << "# timing_beagle_total=host wall time for the input updates "
+         "selected by benchmark_mode, pruning, scaling, root "
+         "integration, and per-pattern likelihood retrieval\n"
+      << "# timed_output=per-unique-pattern log likelihoods; pattern "
+         "multiplicities are fixed to one inside BEAGLE and the "
+         "empirical multiplicities are applied outside timing for "
+         "both implementations\n"
+      << "# transition_matrices=the same stable reversible-nucleotide "
+         "matrices are constructed by the adapter for native and "
+         "BEAGLE evaluation, then supplied through "
+         "beagleSetTransitionMatrices; construction and upload are "
+         "included whenever factors are timed\n"
+      << "# warmup=all modes execute one untimed evaluation before "
+         "measurement; this is not included in initial_staging_ms\n"
+      << "# timing_initial_staging=one untimed full-input evaluation "
+         "per exact site chunk for resident modes; reported "
+         "separately and excluded from beagle_total_ms\n"
+      << "# measurement_scope="
+      << (update_inputs || site_batch == problem.sites
+              ? "complete-alignment-wall-time"
+              : "sum-of-per-chunk-resident-calls")
+      << '\n'
+      << "# resident_chunking=factor-update and fixed-model stage "
+         "and measure each exact chunk before reusing its workspace; "
+         "their totals are projections unless site_batch equals the "
+         "number of unique patterns\n"
+      << "# factor_projection=for multiple chunks, factor-update "
+         "sums one factor refresh per resident chunk; it does not "
+         "estimate a scheme sharing one refreshed factor copy across "
+         "all chunks\n"
+      << "# conventional_cpu_reference=full evaluation with an "
+         "independently memory-bounded workspace; it is not a mode-matched "
+         "resident implementation\n"
+      << "baseline,beagle_resource,precision,benchmark_mode,study,"
+         "substitution_model,substitution_rate,hky_kappa,rate_categories,gamma_"
+         "shape,"
+         "dataset,"
+         "topology,"
+         "sequence_generation,evolutionary_root_to_tip_distance,minimum_branch_"
+         "length,floored_branch_count,"
+         "seed_base,seed,replicate,leaves,nodes,sites,unique_patterns,"
+         "site_batch,cpu_reference_site_batch,binary_tree,tree_height,"
+         "sackin_index,colless_index,"
+         "normalized_colless,structural_rounds,primitive_levels,"
+         "primitive_operations,planning_ms,repeats,"
+         "conditioning_ms,threads,beagle_resource_name,"
+         "beagle_implementation,beagle_implementation_flags,"
+         "compact_tip_count,partial_tip_count,"
+         "sequential_ms,beagle_input_ms,beagle_factor_ms,"
+         "beagle_pruning_ms,beagle_total_ms,initial_staging_ms,"
+         "conventional_full_cpu_over_beagle,"
+         "sequential_log_likelihood,beagle_log_likelihood,"
+         "max_abs_error,max_relative_error,sequential_samples_ms,"
+         "beagle_input_samples_ms,beagle_factor_samples_ms,"
+         "beagle_pruning_samples_ms,beagle_total_samples_ms\n"
+      << std::setprecision(10) << "beagle," << options.resource << ','
+      << tree_hmm::kPrecisionName << ',' << options.problem.benchmark_mode
+      << ',' << options.problem.study << ',' << options.problem.nucleotide_model
+      << ',' << options.problem.substitution_rate << ','
+      << options.problem.hky_kappa << ',' << options.problem.rate_categories
+      << ',' << BenchmarkGammaShape(options.problem) << ',' << problem.dataset
+      << ',' << problem.topology << ',' << problem.sequence_generation << ',';
+  if (problem.evolutionary_root_to_tip_distance.has_value())
+    std::cout << *problem.evolutionary_root_to_tip_distance;
+  std::cout << ',' << problem.minimum_branch_length << ','
+            << problem.floored_branch_count << ',' << problem.base_seed << ','
+            << problem.seed << ',' << problem.replicate << ',' << problem.leaves
+            << ',' << problem.plan.num_nodes() << ',' << problem.raw_sites
+            << ',' << problem.sites << ',' << site_batch << ','
+            << cpu_site_batch << ',' << (problem.shape.binary ? 1 : 0) << ','
+            << problem.shape.height << ',' << problem.shape.sackin << ','
+            << problem.shape.colless << ',' << problem.shape.normalized_colless
+            << ',' << statistics.rounds << ',' << statistics.primitive_levels
+            << ','
+            << statistics.rakes + problem.plan.num_branch_combinations() +
+                   problem.plan.num_branch_absorptions() +
+                   statistics.compressions
+            << ',' << problem.planning_ms << ',' << options.problem.repeats
+            << ',' << options.problem.conditioning_ms << ',' << options.threads
+            << ',' << full_beagle.resource_name() << ','
+            << full_beagle.implementation_name() << ','
+            << full_beagle.implementation_flags() << ','
+            << full_beagle.compact_tip_count() << ','
+            << full_beagle.partial_tip_count() << ',' << sequential_ms << ','
+            << beagle_tip_ms << ',' << beagle_factor_ms << ','
+            << beagle_pruning_ms << ',' << beagle_total_ms << ','
+            << initial_staging_ms << ',' << sequential_ms / beagle_total_ms
+            << ',' << sequential_log_likelihood << ',' << beagle_log_likelihood
+            << ',' << absolute_error << ',' << relative_error << ','
+            << JoinSamples(sequential_times) << ',' << JoinSamples(tip_times)
+            << ',' << JoinSamples(factor_times) << ','
+            << JoinSamples(pruning_times) << ',' << JoinSamples(total_times)
+            << '\n';
 }
 
 } // namespace

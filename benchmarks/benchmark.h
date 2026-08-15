@@ -49,6 +49,11 @@ struct Options {
   std::size_t replicates = 1;
   bool compress_patterns = false;
   std::string benchmark_mode = "full-input-update";
+  std::string nucleotide_model = "jc69";
+  double hky_kappa = 4.0;
+  double substitution_rate = 1.0;
+  std::size_t rate_categories = 1;
+  std::optional<double> gamma_shape;
   std::string synthetic_sequence_model = "independent-patterns";
   std::optional<double> evolutionary_root_to_tip_distance;
   double minimum_branch_length = 0.0;
@@ -143,9 +148,8 @@ inline Options ParseOptions(int argc, char **argv) {
           ParseNonnegativeSize(argv[index], "conditioning duration");
     } else if (option == "--topology") {
       options.topology = argv[index];
-      if (options.topology != "balanced" &&
-          options.topology != "caterpillar" && options.topology != "yule" &&
-          options.topology != "beta-critical" &&
+      if (options.topology != "balanced" && options.topology != "caterpillar" &&
+          options.topology != "yule" && options.topology != "beta-critical" &&
           options.topology != "uniform") {
         throw std::invalid_argument(
             "--topology must be balanced, caterpillar, yule, beta-critical, "
@@ -161,7 +165,8 @@ inline Options ParseOptions(int argc, char **argv) {
     } else if (option == "--compress-patterns") {
       const std::string_view value = argv[index];
       if (value != "true" && value != "false")
-        throw std::invalid_argument("--compress-patterns must be true or false");
+        throw std::invalid_argument(
+            "--compress-patterns must be true or false");
       options.compress_patterns = value == "true";
     } else if (option == "--benchmark-mode") {
       options.benchmark_mode = argv[index];
@@ -172,6 +177,23 @@ inline Options ParseOptions(int argc, char **argv) {
             "--benchmark-mode must be fixed-model, factor-update, or "
             "full-input-update");
       }
+    } else if (option == "--nucleotide-model") {
+      options.nucleotide_model = argv[index];
+      if (options.nucleotide_model != "jc69" &&
+          options.nucleotide_model != "hky" &&
+          options.nucleotide_model != "gtr") {
+        throw std::invalid_argument(
+            "--nucleotide-model must be jc69, hky, or gtr");
+      }
+    } else if (option == "--hky-kappa") {
+      options.hky_kappa = ParseNonnegativeDouble(argv[index], "HKY kappa");
+    } else if (option == "--substitution-rate") {
+      options.substitution_rate =
+          ParseNonnegativeDouble(argv[index], "substitution rate");
+    } else if (option == "--rate-categories") {
+      options.rate_categories = ParseSize(argv[index], "rate category count");
+    } else if (option == "--gamma-shape") {
+      options.gamma_shape = ParsePositiveDouble(argv[index], "gamma shape");
     } else if (option == "--synthetic-sequence-model") {
       options.synthetic_sequence_model = argv[index];
       if (options.synthetic_sequence_model != "independent-patterns" &&
@@ -180,14 +202,15 @@ inline Options ParseOptions(int argc, char **argv) {
             "--synthetic-sequence-model must be independent-patterns or jc69");
       }
     } else if (option == "--evolutionary-root-to-tip-distance") {
-      options.evolutionary_root_to_tip_distance = ParsePositiveDouble(
-          argv[index], "evolutionary root-to-tip distance");
+      options.evolutionary_root_to_tip_distance =
+          ParsePositiveDouble(argv[index], "evolutionary root-to-tip distance");
     } else if (option == "--minimum-branch-length") {
       options.minimum_branch_length =
           ParseNonnegativeDouble(argv[index], "minimum branch length");
     } else if (option == "--study-label") {
       options.study = argv[index];
-      if (options.study.empty() || options.study.find(',') != std::string::npos ||
+      if (options.study.empty() ||
+          options.study.find(',') != std::string::npos ||
           options.study.find('\n') != std::string::npos) {
         throw std::invalid_argument(
             "--study-label must be a nonempty CSV-safe value");
@@ -256,7 +279,54 @@ inline Options ParseOptions(int argc, char **argv) {
     throw std::invalid_argument(
         "--minimum-branch-length applies only to empirical trees");
   }
+  if (options.rate_categories > 1 && !options.gamma_shape.has_value()) {
+    throw std::invalid_argument(
+        "multiple rate categories require --gamma-shape");
+  }
+  if (options.rate_categories == 1 && options.gamma_shape.has_value()) {
+    throw std::invalid_argument(
+        "--gamma-shape requires at least two rate categories");
+  }
   return options;
+}
+
+struct BenchmarkEvolutionModel {
+  NucleotideModel nucleotide;
+  std::optional<RateMixture> rates;
+
+  RateMixtureView rate_view() const {
+    return rates.has_value() ? rates->view() : RateMixtureView{};
+  }
+};
+
+inline std::string BenchmarkGammaShape(const Options &options) {
+  if (!options.gamma_shape.has_value())
+    return "none";
+  std::ostringstream value;
+  value << std::setprecision(17) << *options.gamma_shape;
+  return value.str();
+}
+
+inline BenchmarkEvolutionModel
+MakeBenchmarkEvolutionModel(const Options &options) {
+  constexpr std::array<double, 4> kFrequencies{0.31, 0.19, 0.27, 0.23};
+  NucleotideModel nucleotide;
+  if (options.nucleotide_model == "jc69") {
+    nucleotide = JukesCantorModel(options.substitution_rate);
+  } else if (options.nucleotide_model == "hky") {
+    nucleotide = HasegawaKishinoYanoModel(kFrequencies, options.hky_kappa,
+                                          options.substitution_rate);
+  } else {
+    nucleotide =
+        GeneralTimeReversibleModel(kFrequencies, {1.2, 3.1, 0.7, 1.8, 4.6, 0.9},
+                                   options.substitution_rate);
+  }
+  std::optional<RateMixture> rates;
+  if (options.rate_categories > 1) {
+    rates.emplace(DiscreteGammaRateMixture(*options.gamma_shape,
+                                           options.rate_categories));
+  }
+  return {std::move(nucleotide), std::move(rates)};
 }
 
 inline std::size_t FloorBranchLengths(std::vector<Scalar> &lengths,
@@ -325,14 +395,14 @@ inline void CompressPatterns(Problem &problem) {
 inline Problem MakeProblem(const Options &options, std::size_t replicate = 0) {
   if (replicate < options.replicate_start ||
       replicate - options.replicate_start >= options.replicates) {
-    throw std::invalid_argument("synthetic replicate is outside the requested range");
+    throw std::invalid_argument(
+        "synthetic replicate is outside the requested range");
   }
   if (options.newick.has_value()) {
     const Clock::time_point planning_begin = Clock::now();
     Phylogeny phylogeny = LoadNewick(*options.newick);
-    const std::size_t floored_branch_count =
-        FloorBranchLengths(phylogeny.branch_lengths,
-                           options.minimum_branch_length);
+    const std::size_t floored_branch_count = FloorBranchLengths(
+        phylogeny.branch_lengths, options.minimum_branch_length);
     const double planning_ms = Milliseconds(planning_begin, Clock::now());
     const SequenceAlignment alignment = options.fasta.has_value()
                                             ? LoadFasta(*options.fasta)
@@ -355,26 +425,26 @@ inline Problem MakeProblem(const Options &options, std::size_t replicate = 0) {
     }
     if (raw_sites > std::numeric_limits<std::size_t>::max())
       throw std::overflow_error("total pattern weight exceeds size_t");
-    Problem result{std::move(phylogeny.plan),
-                   std::move(phylogeny.branch_lengths),
-                   std::move(encoded.observation_nodes),
-                   std::move(encoded.observations),
-                   options.dataset_label.value_or(
-                       options.newick->stem().string()),
-                   "empirical",
-                   leaves,
-                   encoded.sites,
-                   static_cast<std::size_t>(raw_sites),
-                   std::move(weights),
-                   options.seed,
-                   options.seed,
-                   0,
-                   planning_ms,
-                   {},
-                   "empirical",
-                   std::nullopt,
-                   options.minimum_branch_length,
-                   floored_branch_count};
+    Problem result{
+        std::move(phylogeny.plan),
+        std::move(phylogeny.branch_lengths),
+        std::move(encoded.observation_nodes),
+        std::move(encoded.observations),
+        options.dataset_label.value_or(options.newick->stem().string()),
+        "empirical",
+        leaves,
+        encoded.sites,
+        static_cast<std::size_t>(raw_sites),
+        std::move(weights),
+        options.seed,
+        options.seed,
+        0,
+        planning_ms,
+        {},
+        "empirical",
+        std::nullopt,
+        options.minimum_branch_length,
+        floored_branch_count};
     if (options.compress_patterns)
       CompressPatterns(result);
     result.shape = ShapeStatistics(result.plan);
@@ -385,11 +455,10 @@ inline Problem MakeProblem(const Options &options, std::size_t replicate = 0) {
   const std::size_t sites = options.sites;
   const bool simulate_jc69 = options.synthetic_sequence_model == "jc69";
   const std::uint64_t topology_seed =
-      simulate_jc69
-          ? SyntheticTopologySeed(options.seed, leaves, replicate,
-                                  options.topology)
-          : SyntheticSeed(options.seed, leaves, sites, replicate,
-                          options.topology);
+      simulate_jc69 ? SyntheticTopologySeed(options.seed, leaves, replicate,
+                                            options.topology)
+                    : SyntheticSeed(options.seed, leaves, sites, replicate,
+                                    options.topology);
   const std::uint64_t seed =
       simulate_jc69
           ? SyntheticSequenceSeed(topology_seed, sites,
@@ -405,8 +474,8 @@ inline Problem MakeProblem(const Options &options, std::size_t replicate = 0) {
   if (simulate_jc69) {
     const std::vector<double> simulation_lengths = MakeClockLikeBranchLengths(
         plan, *options.evolutionary_root_to_tip_distance);
-    observations = SimulateJukesCantorAlignment(
-        plan, simulation_lengths, topology.leaves, sites, seed);
+    observations = SimulateJukesCantorAlignment(plan, simulation_lengths,
+                                                topology.leaves, sites, seed);
     lengths.reserve(simulation_lengths.size());
     std::transform(simulation_lengths.begin(), simulation_lengths.end(),
                    std::back_inserter(lengths),
@@ -414,9 +483,10 @@ inline Problem MakeProblem(const Options &options, std::size_t replicate = 0) {
   } else {
     lengths.resize(plan.num_edges());
     for (std::size_t edge = 0; edge < lengths.size(); ++edge)
-      lengths[edge] = Scalar{0.02} + Scalar{0.18} * static_cast<Scalar>(
-                                                  DeterministicRandom(seed + edge)
-                                                      .Unit());
+      lengths[edge] =
+          Scalar{0.02} +
+          Scalar{0.18} *
+              static_cast<Scalar>(DeterministicRandom(seed + edge).Unit());
     observations = MakeUniquePatterns(sites, leaves, seed);
   }
 
@@ -538,17 +608,17 @@ inline AlignmentModelView SiteBatch(AlignmentModelView model,
       model.observation_nodes,
       model.observations.subspan(first_site * model.observation_nodes.size(),
                                  site_count * model.observation_nodes.size()),
-      model.root_frequencies,
-      model.substitution_rate};
+      model.nucleotide_model,
+      model.rate_mixture};
 }
 
 inline std::size_t CpuReferenceSiteBatch(AlignmentModelView model) {
   // Keep the conventional correctness baseline independently bounded even
   // when an accelerator can accommodate a much larger site batch.
   constexpr std::size_t kTargetNodeSites = std::size_t{1} << 20;
-  return std::min(model.sites,
-                  std::max(std::size_t{1},
-                           kTargetNodeSites / model.plan.num_nodes()));
+  return std::min(
+      model.sites,
+      std::max(std::size_t{1}, kTargetNodeSites / model.plan.num_nodes()));
 }
 
 template <typename AcceleratorWorkspace, typename Reserve, typename Evaluate>
@@ -646,19 +716,21 @@ BenchmarkResult RunCompleteAlignmentInterleaved(
           total_times};
 }
 
-// Times resident-input modes as a sum of per-chunk prepared calls. Capacity-bounded
-// alignments are processed one exact site chunk at a time. Each chunk is first
-// staged by one untimed kAll call, after which its timed kFactors or kNone
-// repetitions reuse precisely those resident observations. The workspace is
-// then reused for the next chunk, so the benchmark neither allocates one
-// device workspace per chunk nor implies that the full alignment is resident.
+// Times resident-input modes as a sum of per-chunk prepared calls.
+// Capacity-bounded alignments are processed one exact site chunk at a time.
+// Each chunk is first staged by one untimed kAll call, after which its timed
+// kFactors or kNone repetitions reuse precisely those resident observations.
+// The workspace is then reused for the next chunk, so the benchmark neither
+// allocates one device workspace per chunk nor implies that the full alignment
+// is resident.
 template <typename AcceleratorWorkspace, typename Reserve, typename Evaluate>
-BenchmarkResult RunResidentChunkProjection(
-    AlignmentModelView model, int repeats, std::size_t conditioning_ms,
-    std::size_t site_batch, InputUpdate update,
-    AcceleratorWorkspace &full_accelerator,
-    AcceleratorWorkspace &tail_accelerator, Reserve &&reserve,
-    Evaluate &&evaluate) {
+BenchmarkResult
+RunResidentChunkProjection(AlignmentModelView model, int repeats,
+                           std::size_t conditioning_ms, std::size_t site_batch,
+                           InputUpdate update,
+                           AcceleratorWorkspace &full_accelerator,
+                           AcceleratorWorkspace &tail_accelerator,
+                           Reserve &&reserve, Evaluate &&evaluate) {
   if (site_batch == 0 || site_batch > model.sites)
     throw std::invalid_argument("invalid accelerator site batch");
   const std::size_t cpu_site_batch = CpuReferenceSiteBatch(model);
@@ -721,8 +793,7 @@ BenchmarkResult RunResidentChunkProjection(
     static_cast<void>(evaluate(chunk, workspace, InputUpdate::kAll));
     conditioning_chunk = (first_site + count) % model.sites;
   };
-  ConditionInterleaved(conditioning_ms, run_cpu,
-                       condition_accelerator);
+  ConditionInterleaved(conditioning_ms, run_cpu, condition_accelerator);
   run_cpu();
   cpu_times.clear();
   for (int repeat = 0; repeat < repeats; ++repeat)
@@ -785,12 +856,12 @@ BenchmarkResult RunResidentChunkProjection(
 }
 
 template <typename AcceleratorWorkspace, typename Reserve, typename Evaluate>
-BenchmarkResult RunInterleaved(
-    AlignmentModelView model, int repeats, std::size_t conditioning_ms,
-    std::size_t site_batch, InputUpdate update,
-    AcceleratorWorkspace &full_accelerator,
-    AcceleratorWorkspace &tail_accelerator, Reserve &&reserve,
-    Evaluate &&evaluate) {
+BenchmarkResult RunInterleaved(AlignmentModelView model, int repeats,
+                               std::size_t conditioning_ms,
+                               std::size_t site_batch, InputUpdate update,
+                               AcceleratorWorkspace &full_accelerator,
+                               AcceleratorWorkspace &tail_accelerator,
+                               Reserve &&reserve, Evaluate &&evaluate) {
   if (site_batch == 0 || site_batch > model.sites)
     throw std::invalid_argument("invalid accelerator site batch");
   if (update == InputUpdate::kAll) {
@@ -798,10 +869,10 @@ BenchmarkResult RunInterleaved(
         model, repeats, conditioning_ms, site_batch, full_accelerator,
         std::forward<Reserve>(reserve), std::forward<Evaluate>(evaluate));
   }
-  return RunResidentChunkProjection(
-      model, repeats, conditioning_ms, site_batch, update, full_accelerator,
-      tail_accelerator, std::forward<Reserve>(reserve),
-      std::forward<Evaluate>(evaluate));
+  return RunResidentChunkProjection(model, repeats, conditioning_ms, site_batch,
+                                    update, full_accelerator, tail_accelerator,
+                                    std::forward<Reserve>(reserve),
+                                    std::forward<Evaluate>(evaluate));
 }
 
 inline double MaxAbsoluteError(std::span<const Scalar> expected,
@@ -830,9 +901,7 @@ inline double MaxRelativeError(std::span<const Scalar> expected,
     if (!std::isfinite(reference) || !std::isfinite(value))
       return std::numeric_limits<double>::infinity();
     const double error = std::abs(reference - value);
-    result = std::max(
-        result,
-        error / std::max(1.0, std::abs(reference)));
+    result = std::max(result, error / std::max(1.0, std::abs(reference)));
   }
   return result;
 }
@@ -865,17 +934,20 @@ inline void RequireBenchmarkCorrectness(double absolute_error,
 inline void PrintHeader(const char *backend, const std::string &device,
                         const Options &options, const Problem &problem) {
   const btrc::PlanStatistics statistics = btrc::Statistics(problem.plan);
-  std::cout
-      << "# backend=" << backend << '\n'
-      << "# precision=" << tree_hmm::kPrecisionName << '\n'
-      << "# device=" << device << '\n'
-      << "# dataset=" << problem.dataset << '\n'
-      << "# topology=" << problem.topology << '\n'
-      << "# substitution_model=JC69\n"
-      << "# benchmark_mode=" << options.benchmark_mode << '\n'
-      << "# study=" << options.study << '\n'
-      << "# sequence_generation=" << problem.sequence_generation << '\n'
-      << "# topological_height_edges=" << problem.shape.height << '\n';
+  std::cout << "# backend=" << backend << '\n'
+            << "# precision=" << tree_hmm::kPrecisionName << '\n'
+            << "# device=" << device << '\n'
+            << "# dataset=" << problem.dataset << '\n'
+            << "# topology=" << problem.topology << '\n'
+            << "# substitution_model=" << options.nucleotide_model << '\n'
+            << "# substitution_rate=" << options.substitution_rate << '\n'
+            << "# hky_kappa=" << options.hky_kappa << '\n'
+            << "# rate_categories=" << options.rate_categories << '\n'
+            << "# gamma_shape=" << BenchmarkGammaShape(options) << '\n'
+            << "# benchmark_mode=" << options.benchmark_mode << '\n'
+            << "# study=" << options.study << '\n'
+            << "# sequence_generation=" << problem.sequence_generation << '\n'
+            << "# topological_height_edges=" << problem.shape.height << '\n';
   if (problem.evolutionary_root_to_tip_distance.has_value()) {
     std::cout << "# evolutionary_root_to_tip_distance="
               << *problem.evolutionary_root_to_tip_distance << '\n';
@@ -886,7 +958,8 @@ inline void PrintHeader(const char *backend, const std::string &device,
       << "# timing_prepared=host wall time inside the preallocated tree-HMM "
          "backend; it includes only the input transfers selected by "
          "benchmark_mode, computation, and result transfer\n"
-      << "# timing_device_compute_download=kernel+result-download device events; "
+      << "# timing_device_compute_download=kernel+result-download device "
+         "events; "
          "input upload excluded\n"
       << "# timing_measured_total=complete-alignment public-call wall time "
          "for full-input-update; sum of exact per-chunk resident-call wall "
@@ -898,7 +971,8 @@ inline void PrintHeader(const char *backend, const std::string &device,
          "measurement; this is not included in initial_staging_ms\n"
       << "# measurement_scope="
       << (options.benchmark_mode == "full-input-update" ||
-                  (options.site_batch == 0 || options.site_batch >= problem.sites)
+                  (options.site_batch == 0 ||
+                   options.site_batch >= problem.sites)
               ? "complete-alignment-wall-time"
               : "sum-of-per-chunk-resident-calls")
       << '\n'
@@ -911,14 +985,21 @@ inline void PrintHeader(const char *backend, const std::string &device,
          "scheme that shares one refreshed factor copy across all chunks\n"
       << "# conditioning_ms=" << options.conditioning_ms << '\n'
       << "# conventional_cpu_reference=full evaluation with an independently "
-         "memory-bounded workspace; it is a correctness/reference timing, not a "
+         "memory-bounded workspace; it is a correctness/reference timing, not "
+         "a "
          "mode-matched resident implementation\n"
       << "# execution_order=CPU and accelerator alternate for full-input; "
          "resident projections time the conventional CPU reference "
          "separately\n"
-      << "backend,precision,benchmark_mode,study,dataset,topology,sequence_generation,"
-         "evolutionary_root_to_tip_distance,minimum_branch_length,floored_branch_count,seed_base,seed,replicate,leaves,nodes,"
-         "sites,unique_patterns,site_batch,cpu_reference_site_batch,binary_tree,tree_height,sackin_index,"
+      << "backend,precision,benchmark_mode,study,substitution_model,"
+         "substitution_rate,hky_kappa,rate_categories,gamma_shape,dataset,"
+         "topology,"
+         "sequence_"
+         "generation,"
+         "evolutionary_root_to_tip_distance,minimum_branch_length,floored_"
+         "branch_count,seed_base,seed,replicate,leaves,nodes,"
+         "sites,unique_patterns,site_batch,cpu_reference_site_batch,binary_"
+         "tree,tree_height,sackin_index,"
          "colless_index,normalized_colless,structural_rounds,"
          "primitive_levels,primitive_operations,planning_ms,"
          "repeats,conditioning_ms,cpu_ms,cpu_p25_ms,cpu_p75_ms,prepare_ms,"
@@ -950,7 +1031,8 @@ inline void PrintRow(const char *backend, const Options &options,
       problem.plan.num_branch_absorptions() + statistics.compressions;
   const auto weighted_sum = [&](std::span<const Scalar> values) {
     if (values.size() != problem.pattern_weights.size())
-      throw std::invalid_argument("benchmark likelihood weights have a wrong shape");
+      throw std::invalid_argument(
+          "benchmark likelihood weights have a wrong shape");
     double result = 0.0;
     for (std::size_t pattern = 0; pattern < values.size(); ++pattern) {
       result += static_cast<double>(problem.pattern_weights[pattern]) *
@@ -960,33 +1042,29 @@ inline void PrintRow(const char *backend, const Options &options,
   };
   std::cout << std::setprecision(10) << backend << ','
             << tree_hmm::kPrecisionName << ',' << options.benchmark_mode << ','
-            << options.study << ','
-            << problem.dataset << ','
-            << problem.topology << ',' << problem.sequence_generation << ',';
+            << options.study << ',' << options.nucleotide_model << ','
+            << options.substitution_rate << ',' << options.hky_kappa << ','
+            << options.rate_categories << ',' << BenchmarkGammaShape(options)
+            << ',' << problem.dataset << ',' << problem.topology << ','
+            << problem.sequence_generation << ',';
   if (problem.evolutionary_root_to_tip_distance.has_value())
     std::cout << *problem.evolutionary_root_to_tip_distance;
   std::cout << ',' << problem.minimum_branch_length << ','
             << problem.floored_branch_count << ',' << problem.base_seed << ','
-            << problem.seed << ','
-            << problem.replicate << ',' << problem.leaves << ','
-            << problem.plan.num_nodes() << ',' << problem.raw_sites << ','
-            << problem.sites << ',' << site_batch << ','
-            << CpuReferenceSiteBatch(
-                   AlignmentModelView{problem.plan, problem.sites,
-                                      problem.branch_lengths,
-                                      problem.observation_nodes,
-                                      problem.observations})
-            << ','
-            << (problem.shape.binary ? 1 : 0) << ',' << problem.shape.height
-            << ',' << problem.shape.sackin << ','
-            << problem.shape.colless << ','
-            << problem.shape.normalized_colless << ',' << statistics.rounds
-            << ',' << statistics.primitive_levels << ','
-            << primitive_operations << ',' << problem.planning_ms << ','
-            << options.repeats << ','
-            << options.conditioning_ms << ',' << cpu_ms << ','
-            << result.cpu_p25_ms << ',' << result.cpu_p75_ms << ','
-            << prepare_ms << ',' << accelerator.wall_ms << ','
+            << problem.seed << ',' << problem.replicate << ',' << problem.leaves
+            << ',' << problem.plan.num_nodes() << ',' << problem.raw_sites
+            << ',' << problem.sites << ',' << site_batch << ','
+            << CpuReferenceSiteBatch(AlignmentModelView{
+                   problem.plan, problem.sites, problem.branch_lengths,
+                   problem.observation_nodes, problem.observations})
+            << ',' << (problem.shape.binary ? 1 : 0) << ','
+            << problem.shape.height << ',' << problem.shape.sackin << ','
+            << problem.shape.colless << ',' << problem.shape.normalized_colless
+            << ',' << statistics.rounds << ',' << statistics.primitive_levels
+            << ',' << primitive_operations << ',' << problem.planning_ms << ','
+            << options.repeats << ',' << options.conditioning_ms << ','
+            << cpu_ms << ',' << result.cpu_p25_ms << ',' << result.cpu_p75_ms
+            << ',' << prepare_ms << ',' << accelerator.wall_ms << ','
             << result.prepared_p25_ms << ',' << result.prepared_p75_ms << ','
             << result.initial_staging_ms << ','
             << accelerator.kernel_ms + accelerator.download_ms << ','
@@ -996,8 +1074,8 @@ inline void PrintRow(const char *backend, const Options &options,
             << cpu_ms / total_accelerator_ms << ','
             << cpu_ms / accelerator.wall_ms << ','
             << weighted_sum(result.cpu_values) << ','
-            << weighted_sum(result.accelerator_values)
-            << ',' << absolute_error << ',' << relative_error << ','
+            << weighted_sum(result.accelerator_values) << ',' << absolute_error
+            << ',' << relative_error << ','
             << JoinSamples(result.cpu_samples_ms) << ','
             << JoinSamples(result.prepare_samples_ms) << ','
             << JoinSamples(result.prepared_samples_ms) << ','

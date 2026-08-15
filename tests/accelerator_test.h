@@ -33,9 +33,10 @@ void TestAccelerator(Workspace &workspace, Reserve &&reserve,
       N::kR, N::kG, N::kT, N::kC, N::kC, N::kA, N::kUnknown, N::kY,
       N::kB, N::kV, N::kW, N::kD, N::kH, N::kM, N::kS,
   };
-  const std::array<Scalar, 4> frequencies{0.3, 0.2, 0.2, 0.3};
+  const NucleotideModel nucleotide_model = GeneralTimeReversibleModel(
+      {0.3, 0.2, 0.2, 0.3}, {1.2, 3.1, 0.7, 1.8, 4.6, 0.9});
   const AlignmentModelView model{
-      plan, kSites, lengths, observation_nodes, observations, frequencies, 1.0};
+      plan, kSites, lengths, observation_nodes, observations, nucleotide_model};
 
   SequentialWorkspace sequential_workspace;
   sequential_workspace.Reserve(plan, kSites);
@@ -55,6 +56,23 @@ void TestAccelerator(Workspace &workspace, Reserve &&reserve,
             "phylogenetic accelerator likelihood is inaccurate");
     }
   }
+
+  const RateMixture gamma = DiscreteGammaRateMixture(0.7, 4);
+  AlignmentModelView mixture_model = model;
+  mixture_model.rate_mixture = gamma.view();
+  sequential_workspace.Reserve(plan, kSites);
+  const std::span<const Scalar> expected_mixture =
+      LogLikelihoodsPrepared(mixture_model, sequential_workspace);
+  reserve(mixture_model, 2);
+  const std::span<const Scalar> actual_mixture =
+      evaluate(mixture_model, workspace);
+  for (std::size_t site = 0; site < kSites; ++site) {
+    const double error = std::abs(static_cast<double>(actual_mixture[site]) -
+                                  expected_mixture[site]);
+    Check(error <= 4e-5 * std::max(1.0, std::abs(static_cast<double>(
+                                            expected_mixture[site]))),
+          "phylogenetic accelerator rate-mixture likelihood is inaccurate");
+  }
 }
 
 template <class Workspace, class Reserve, class Evaluate>
@@ -67,16 +85,17 @@ void TestResidentAccelerator(Workspace &workspace, Reserve &&reserve,
   constexpr std::size_t kSites = 5;
   using N = Nucleotide;
   std::vector<N> observations{
-      N::kA, N::kC, N::kG, N::kT, N::kC, N::kG, N::kT,
-      N::kA, N::kG, N::kT, N::kA, N::kC, N::kT, N::kA,
-      N::kC, N::kG, N::kA, N::kG, N::kC, N::kT,
+      N::kA, N::kC, N::kG, N::kT, N::kC, N::kG, N::kT, N::kA, N::kG, N::kT,
+      N::kA, N::kC, N::kT, N::kA, N::kC, N::kG, N::kA, N::kG, N::kC, N::kT,
   };
-  const AlignmentModelView model{plan, kSites, lengths, observation_nodes,
-                                 observations};
+  const RateMixture gamma = DiscreteGammaRateMixture(0.8, 3);
+  const AlignmentModelView model{plan,         kSites,
+                                 lengths,      observation_nodes,
+                                 observations, JukesCantorModel(),
+                                 gamma.view()};
   reserve(model, kSites);
 
-  for (const InputUpdate update : {InputUpdate::kFactors,
-                                   InputUpdate::kNone}) {
+  for (const InputUpdate update : {InputUpdate::kFactors, InputUpdate::kNone}) {
     bool rejected = false;
     try {
       static_cast<void>(evaluate(model, workspace, update));
@@ -97,8 +116,8 @@ void TestResidentAccelerator(Workspace &workspace, Reserve &&reserve,
         "phylogenetic accelerator did not reuse observations");
   const std::span<const Scalar> observations_updated =
       evaluate(model, workspace, InputUpdate::kAll);
-  const std::vector<Scalar> after_observation_update(observations_updated.begin(),
-                                                     observations_updated.end());
+  const std::vector<Scalar> after_observation_update(
+      observations_updated.begin(), observations_updated.end());
   Check(!std::equal(after_observation_update.begin(),
                     after_observation_update.end(), initial.begin()),
         "phylogenetic accelerator did not update observations");
@@ -116,8 +135,8 @@ void TestResidentAccelerator(Workspace &workspace, Reserve &&reserve,
         "phylogenetic accelerator did not update factors");
 
   const PreparedTimings timings = workspace.LastTimings();
-  Check(timings.site_batches == 1,
-        "resident phylogenetic evaluation used multiple site batches");
+  Check(timings.site_batches == RateCategoryCount(model.rate_mixture),
+        "resident phylogenetic evaluation used a wrong category-call count");
   Check(timings.backend.upload_ms >= 0.0 && timings.backend.kernel_ms >= 0.0 &&
             timings.backend.download_ms >= 0.0 &&
             timings.backend.wall_ms >= 0.0 &&
@@ -152,9 +171,10 @@ void TestRecoveryAccelerator(
       N::kR, N::kG, N::kT, N::kC, N::kC, N::kA, N::kUnknown, N::kY,
       N::kB, N::kV, N::kW, N::kD, N::kH, N::kM, N::kS,
   };
-  const std::array<Scalar, 4> frequencies{0.3, 0.2, 0.2, 0.3};
+  const NucleotideModel nucleotide_model =
+      HasegawaKishinoYanoModel({0.3, 0.2, 0.2, 0.3}, 3.7);
   const AlignmentModelView full{
-      plan, kSites, lengths, observation_nodes, observations, frequencies, 1.0};
+      plan, kSites, lengths, observation_nodes, observations, nucleotide_model};
   const AlignmentModelView model = SelectSites(full, 1, 2);
 
   AlignmentWorkspace factor_workspace;
@@ -263,6 +283,167 @@ void TestRecoveryAccelerator(
   }
   Check(oversized_batch_rejected,
         "phylogenetic accelerator accepted a recovery batch over capacity");
+
+  const RateMixture gamma = DiscreteGammaRateMixture(0.6, 3);
+  AlignmentModelView mixture_full = full;
+  mixture_full.rate_mixture = gamma.view();
+  const AlignmentModelView mixture_model = SelectSites(mixture_full, 1, 2);
+
+  reserve_maximum(mixture_full, 2);
+  const AlignmentMaximumView mixture_maximum =
+      maximum(mixture_model, workspace);
+  Check(mixture_maximum.rate_categories.size() == mixture_model.sites,
+        "mixture MAP omitted rate-category assignments");
+  std::vector<Scalar> expected_maximum(
+      mixture_model.sites, -std::numeric_limits<Scalar>::infinity());
+  std::vector<std::uint32_t> expected_maximum_states(mixture_model.sites *
+                                                     plan.num_nodes());
+  std::vector<std::uint32_t> expected_maximum_categories(mixture_model.sites);
+  for (std::size_t category = 0; category < gamma.rates().size(); ++category) {
+    const AlignmentModelView category_model =
+        SelectRateCategory(mixture_model, category);
+    AlignmentWorkspace category_workspace;
+    category_workspace.Reserve(plan, category_model.sites);
+    const tree_hmm::BatchedModelView category_factors =
+        Prepare(category_model, category_workspace);
+    for (std::size_t site = 0; site < category_model.sites; ++site) {
+      const std::size_t node_values = plan.num_nodes() * 4;
+      const tree_hmm::ModelView site_factors{
+          plan, 4,
+          category_factors.node_potentials.subspan(site * node_values,
+                                                   node_values),
+          category_factors.edge_potentials};
+      const tree_hmm::MaximumAssignmentView candidate =
+          tree_hmm::MaximumAPosterioriPrepared(site_factors, cpu_workspace);
+      const Scalar weighted =
+          candidate.log_weight +
+          static_cast<Scalar>(std::log(gamma.weights()[category]));
+      if (weighted > expected_maximum[site]) {
+        expected_maximum[site] = weighted;
+        expected_maximum_categories[site] =
+            static_cast<std::uint32_t>(category);
+        std::transform(candidate.states.begin(), candidate.states.end(),
+                       expected_maximum_states.begin() +
+                           site * plan.num_nodes(),
+                       [](std::size_t state) {
+                         return static_cast<std::uint32_t>(state);
+                       });
+      }
+    }
+  }
+  for (std::size_t site = 0; site < mixture_model.sites; ++site) {
+    Check(std::abs(mixture_maximum.log_weights[site] - expected_maximum[site]) <
+              4e-5,
+          "mixture MAP weight is inaccurate");
+    Check(mixture_maximum.rate_categories[site] ==
+              expected_maximum_categories[site],
+          "mixture MAP rate category is inaccurate");
+  }
+  Check(std::equal(mixture_maximum.states.begin(), mixture_maximum.states.end(),
+                   expected_maximum_states.begin()),
+        "mixture MAP ancestral states are inaccurate");
+
+  reserve_marginals(mixture_full, 2);
+  const AlignmentPosteriorView mixture_marginals =
+      marginals(mixture_model, workspace);
+  Check(mixture_marginals.rate_categories.size() ==
+            mixture_model.sites * gamma.rates().size(),
+        "mixture marginals omitted rate-category probabilities");
+  for (std::size_t site = 0; site < mixture_model.sites; ++site) {
+    std::vector<N> node_observations(plan.num_nodes(), N::kUnknown);
+    for (std::size_t observation = 0;
+         observation < mixture_model.observation_nodes.size(); ++observation) {
+      node_observations[mixture_model.observation_nodes[observation]] =
+          mixture_model
+              .observations[site * mixture_model.observation_nodes.size() +
+                            observation];
+    }
+    const SitePosterior expected =
+        AncestralPosterior({plan, lengths, node_observations,
+                            mixture_model.nucleotide_model, gamma.view()});
+    Check(std::abs(mixture_marginals.log_likelihoods[site] -
+                   std::log(expected.likelihood)) < 4e-5,
+          "mixture marginal likelihood is inaccurate");
+    for (std::size_t category = 0; category < gamma.rates().size();
+         ++category) {
+      Check(std::abs(
+                mixture_marginals
+                    .rate_categories[site * gamma.rates().size() + category] -
+                expected.rate_categories[category]) < 8e-5,
+            "mixture posterior rate probability is inaccurate");
+    }
+    for (std::size_t index = 0; index < plan.num_nodes() * 4; ++index) {
+      Check(
+          std::abs(mixture_marginals
+                       .ancestral_states[site * plan.num_nodes() * 4 + index] -
+                   expected.ancestral_states[index]) < 1.2e-4,
+          "mixture ancestral-state marginal is inaccurate");
+    }
+    for (std::size_t index = 0; index < plan.num_edges() * 16; ++index) {
+      Check(std::abs(mixture_marginals
+                         .substitutions[site * plan.num_edges() * 16 + index] -
+                     expected.substitutions[index]) < 1.2e-4,
+            "mixture substitution marginal is inaccurate");
+    }
+  }
+  const std::vector<Scalar> mixture_category_probabilities(
+      mixture_marginals.rate_categories.begin(),
+      mixture_marginals.rate_categories.end());
+
+  std::vector<Scalar> mixture_uniforms(mixture_model.sites *
+                                       (plan.num_nodes() + 1));
+  for (std::size_t index = 0; index < mixture_model.sites * plan.num_nodes();
+       ++index) {
+    mixture_uniforms[index] =
+        Scalar{0.03} + Scalar{0.09} * static_cast<Scalar>(index % 9);
+  }
+  mixture_uniforms[mixture_model.sites * plan.num_nodes()] = Scalar{0.12};
+  mixture_uniforms[mixture_model.sites * plan.num_nodes() + 1] = Scalar{0.83};
+  reserve_sampling(mixture_full, 2);
+  const AlignmentPosteriorSampleView mixture_sample =
+      sample(mixture_model, mixture_uniforms, workspace);
+  Check(mixture_sample.rate_categories.size() == mixture_model.sites,
+        "mixture sample omitted rate categories");
+  for (std::size_t site = 0; site < mixture_model.sites; ++site) {
+    Scalar cumulative = 0.0;
+    std::uint32_t expected_category =
+        static_cast<std::uint32_t>(gamma.rates().size() - 1);
+    for (std::size_t category = 0; category + 1 < gamma.rates().size();
+         ++category) {
+      cumulative += mixture_category_probabilities[site * gamma.rates().size() +
+                                                   category];
+      if (mixture_uniforms[mixture_model.sites * plan.num_nodes() + site] <
+          cumulative) {
+        expected_category = static_cast<std::uint32_t>(category);
+        break;
+      }
+    }
+    Check(mixture_sample.rate_categories[site] == expected_category,
+          "mixture posterior sample selected a wrong rate category");
+    const AlignmentModelView category_model =
+        SelectRateCategory(mixture_model, expected_category);
+    AlignmentWorkspace category_workspace;
+    category_workspace.Reserve(plan, category_model.sites);
+    const tree_hmm::BatchedModelView category_factors =
+        Prepare(category_model, category_workspace);
+    const std::size_t node_values = plan.num_nodes() * 4;
+    const tree_hmm::ModelView site_factors{
+        plan, 4,
+        category_factors.node_potentials.subspan(site * node_values,
+                                                 node_values),
+        category_factors.edge_potentials};
+    const std::span<const std::size_t> expected_states =
+        tree_hmm::PosteriorSamplePrepared(
+            site_factors,
+            std::span<const Scalar>(mixture_uniforms)
+                .subspan(site * plan.num_nodes(), plan.num_nodes()),
+            cpu_workspace);
+    for (std::size_t node = 0; node < plan.num_nodes(); ++node) {
+      Check(mixture_sample.states[site * plan.num_nodes() + node] ==
+                expected_states[node],
+            "mixture posterior ancestral sample is inaccurate");
+    }
+  }
 }
 
 } // namespace parallel_phylogenetics::test

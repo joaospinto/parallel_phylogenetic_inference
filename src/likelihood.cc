@@ -22,27 +22,21 @@ Potentials BuildPotentials(SiteModelView model) {
     throw std::invalid_argument("one branch length is required per plan edge");
   if (model.observations.size() != model.plan.num_nodes())
     throw std::invalid_argument("one observation marker is required per node");
-  if (!(model.substitution_rate >= 0.0) ||
-      !std::isfinite(model.substitution_rate)) {
+  ValidateRateMixture(model.rate_mixture);
+  if (RateCategoryCount(model.rate_mixture) != 1)
     throw std::invalid_argument(
-        "the substitution rate must be finite and nonnegative");
-  }
-  const Scalar frequency_sum = std::accumulate(
-      model.root_frequencies.begin(), model.root_frequencies.end(), Scalar{0});
-  const Scalar probability_tolerance =
-      Scalar{16} * std::numeric_limits<Scalar>::epsilon();
-  if (!std::isfinite(frequency_sum) ||
-      std::abs(frequency_sum - Scalar{1}) > probability_tolerance ||
-      std::any_of(model.root_frequencies.begin(), model.root_frequencies.end(),
-                  [](Scalar value) { return value < 0.0; })) {
-    throw std::invalid_argument(
-        "root frequencies must be nonnegative and sum to one");
-  }
+        "site factor construction requires one selected rate category");
+  // NucleotideTransition validates the complete model. Construct the first
+  // matrix eagerly so an empty tree still receives the same validation.
+  if (model.plan.num_edges() == 0)
+    static_cast<void>(NucleotideTransition(model.nucleotide_model, 0.0));
 
   Potentials result;
   result.nodes.assign(model.plan.num_nodes() * 4, 1.0);
-  std::copy(model.root_frequencies.begin(), model.root_frequencies.end(),
-            result.nodes.begin() + model.plan.root() * 4);
+  std::transform(model.nucleotide_model.root_frequencies.begin(),
+                 model.nucleotide_model.root_frequencies.end(),
+                 result.nodes.begin() + model.plan.root() * 4,
+                 [](double value) { return static_cast<Scalar>(value); });
   for (std::size_t node = 0; node < model.plan.num_nodes(); ++node) {
     const Nucleotide observation = model.observations[node];
     if (observation == Nucleotide::kUnknown)
@@ -60,7 +54,7 @@ Potentials BuildPotentials(SiteModelView model) {
   result.edges.reserve(model.plan.num_edges() * 16);
   for (const Scalar length : model.branch_lengths) {
     const auto transition =
-        JukesCantorTransition(length, model.substitution_rate);
+        NucleotideTransition(model.nucleotide_model, length);
     result.edges.insert(result.edges.end(), transition.begin(),
                         transition.end());
   }
@@ -69,49 +63,78 @@ Potentials BuildPotentials(SiteModelView model) {
 
 } // namespace
 
+SiteModelView SelectRateCategory(SiteModelView model, std::size_t category) {
+  ValidateRateMixture(model.rate_mixture);
+  model.nucleotide_model.substitution_rate *=
+      RateCategoryRate(model.rate_mixture, category);
+  model.rate_mixture = {};
+  return model;
+}
+
 std::array<Scalar, 16> JukesCantorTransition(Scalar branch_length,
                                              Scalar rate) {
-  if (!(branch_length >= 0.0) || !std::isfinite(branch_length) ||
-      !(rate >= 0.0) || !std::isfinite(rate)) {
-    throw std::invalid_argument(
-        "Jukes-Cantor branch length and rate must be finite and nonnegative");
-  }
-  // Computing 0.25 * (1 - exp(-4rt/3)) directly loses every off-diagonal
-  // probability when 4rt/3 is small compared with machine epsilon.  expm1
-  // retains the small positive difference from one.
-  const Scalar different =
-      -Scalar{0.25} *
-      std::expm1(-Scalar{4} * rate * branch_length / Scalar{3});
-  const Scalar same = Scalar{1} - Scalar{3} * different;
-  std::array<Scalar, 16> result{};
-  for (std::size_t parent = 0; parent < 4; ++parent) {
-    for (std::size_t child = 0; child < 4; ++child)
-      result[parent * 4 + child] = parent == child ? same : different;
+  return NucleotideTransition(JukesCantorModel(rate), branch_length);
+}
+
+Scalar SiteLikelihood(SiteModelView model) {
+  return std::exp(SiteLogLikelihood(model));
+}
+
+Scalar SiteLogLikelihood(SiteModelView model) {
+  ValidateRateMixture(model.rate_mixture);
+  const std::size_t categories = RateCategoryCount(model.rate_mixture);
+  Scalar result = -std::numeric_limits<Scalar>::infinity();
+  for (std::size_t category = 0; category < categories; ++category) {
+    const Potentials potentials =
+        BuildPotentials(SelectRateCategory(model, category));
+    const Scalar category_log = tree_hmm::LogPartitionFunction(
+        {model.plan, 4, potentials.nodes, potentials.edges});
+    const Scalar weighted =
+        category_log +
+        std::log(RateCategoryWeight(model.rate_mixture, category));
+    if (result == -std::numeric_limits<Scalar>::infinity())
+      result = weighted;
+    else {
+      const Scalar maximum = std::max(result, weighted);
+      result = maximum + std::log(std::exp(result - maximum) +
+                                  std::exp(weighted - maximum));
+    }
   }
   return result;
 }
 
-Scalar SiteLikelihood(SiteModelView model) {
-  const Potentials potentials = BuildPotentials(model);
-  return tree_hmm::PartitionFunction(
-      {model.plan, 4, potentials.nodes, potentials.edges});
-}
-
-Scalar SiteLogLikelihood(SiteModelView model) {
-  const Potentials potentials = BuildPotentials(model);
-  return tree_hmm::LogPartitionFunction(
-      {model.plan, 4, potentials.nodes, potentials.edges});
-}
-
 SitePosterior AncestralPosterior(SiteModelView model) {
-  const Potentials potentials = BuildPotentials(model);
-  tree_hmm::Marginals marginals = tree_hmm::PosteriorMarginals(
-      {model.plan, 4, potentials.nodes, potentials.edges});
-  return {
-      .likelihood = marginals.partition,
-      .ancestral_states = std::move(marginals.nodes),
-      .substitutions = std::move(marginals.edges),
+  ValidateRateMixture(model.rate_mixture);
+  const Scalar log_likelihood = SiteLogLikelihood(model);
+  SitePosterior result{
+      .likelihood = std::exp(log_likelihood),
+      .ancestral_states =
+          std::vector<Scalar>(model.plan.num_nodes() * 4, Scalar{0}),
+      .substitutions =
+          std::vector<Scalar>(model.plan.num_edges() * 16, Scalar{0}),
+      .rate_categories =
+          std::vector<Scalar>(RateCategoryCount(model.rate_mixture), Scalar{0}),
   };
+  const std::size_t categories = RateCategoryCount(model.rate_mixture);
+  for (std::size_t category = 0; category < categories; ++category) {
+    const Potentials potentials =
+        BuildPotentials(SelectRateCategory(model, category));
+    tree_hmm::Marginals marginals = tree_hmm::PosteriorMarginals(
+        {model.plan, 4, potentials.nodes, potentials.edges});
+    const Scalar category_log = tree_hmm::LogPartitionFunction(
+        {model.plan, 4, potentials.nodes, potentials.edges});
+    const Scalar posterior_weight =
+        std::exp(category_log +
+                 std::log(RateCategoryWeight(model.rate_mixture, category)) -
+                 log_likelihood);
+    result.rate_categories[category] = posterior_weight;
+    for (std::size_t index = 0; index < result.ancestral_states.size(); ++index)
+      result.ancestral_states[index] +=
+          posterior_weight * marginals.nodes[index];
+    for (std::size_t index = 0; index < result.substitutions.size(); ++index)
+      result.substitutions[index] += posterior_weight * marginals.edges[index];
+  }
+  return result;
 }
 
 } // namespace parallel_phylogenetics

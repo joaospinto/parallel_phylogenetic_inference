@@ -49,8 +49,9 @@ void Workspace::Reserve(PARALLEL_PHYLOGENETICS_BACKEND_PARAMETERS(
   Impl &storage = *impl_;
   internal::ReserveOperation(
       storage, model, site_batch_capacity,
-      internal::PreparedOperation::kLikelihood, [&](std::size_t batch) {
-        storage.tree_hmm.ReserveCategorical(
+      internal::PreparedOperation::kLikelihood,
+      [&](auto &backend_workspace, std::size_t batch) {
+        backend_workspace.ReserveCategorical(
             PARALLEL_PHYLOGENETICS_BACKEND_ARGUMENTS(model.plan, 4, batch, 16,
                                                      model.observation_nodes));
       });
@@ -61,8 +62,9 @@ void Workspace::ReserveMaximum(PARALLEL_PHYLOGENETICS_BACKEND_PARAMETERS(
   Impl &storage = *impl_;
   internal::ReserveOperation(
       storage, model, site_batch_capacity,
-      internal::PreparedOperation::kMaximum, [&](std::size_t batch) {
-        storage.tree_hmm.ReserveCategoricalMaximum(
+      internal::PreparedOperation::kMaximum,
+      [&](auto &backend_workspace, std::size_t batch) {
+        backend_workspace.ReserveCategoricalMaximum(
             PARALLEL_PHYLOGENETICS_BACKEND_ARGUMENTS(model.plan, 4, batch, 16,
                                                      model.observation_nodes));
       });
@@ -73,11 +75,21 @@ void Workspace::ReserveSampling(PARALLEL_PHYLOGENETICS_BACKEND_PARAMETERS(
   Impl &storage = *impl_;
   internal::ReserveOperation(
       storage, model, site_batch_capacity,
-      internal::PreparedOperation::kSampling, [&](std::size_t batch) {
-        storage.tree_hmm.ReserveCategoricalSampling(
+      internal::PreparedOperation::kSampling,
+      [&](auto &backend_workspace, std::size_t batch) {
+        backend_workspace.ReserveCategoricalSampling(
             PARALLEL_PHYLOGENETICS_BACKEND_ARGUMENTS(model.plan, 4, batch, 16,
                                                      model.observation_nodes));
       });
+  if (storage.rate_categories > 1) {
+    storage.sampling_likelihood_tree_hmms.resize(storage.rate_categories);
+    for (auto &backend_workspace : storage.sampling_likelihood_tree_hmms) {
+      backend_workspace.ReserveCategorical(
+          PARALLEL_PHYLOGENETICS_BACKEND_ARGUMENTS(model.plan, 4,
+                                                   storage.batch_capacity, 16,
+                                                   model.observation_nodes));
+    }
+  }
 }
 
 void Workspace::ReserveMarginals(PARALLEL_PHYLOGENETICS_BACKEND_PARAMETERS(
@@ -85,8 +97,9 @@ void Workspace::ReserveMarginals(PARALLEL_PHYLOGENETICS_BACKEND_PARAMETERS(
   Impl &storage = *impl_;
   internal::ReserveOperation(
       storage, model, site_batch_capacity,
-      internal::PreparedOperation::kMarginals, [&](std::size_t batch) {
-        storage.tree_hmm.ReserveCategoricalMarginals(
+      internal::PreparedOperation::kMarginals,
+      [&](auto &backend_workspace, std::size_t batch) {
+        backend_workspace.ReserveCategoricalMarginals(
             PARALLEL_PHYLOGENETICS_BACKEND_ARGUMENTS(model.plan, 4, batch, 16,
                                                      model.observation_nodes));
       });
@@ -111,11 +124,14 @@ std::span<const Scalar> LogLikelihoodsPrepared(AlignmentModelView model,
   internal::ValidatePrepared(model, storage,
                              internal::PreparedOperation::kLikelihood, false);
   return internal::LogLikelihoodsPrepared(
-      model, storage.batch_capacity, storage.tree_hmm.CategoricalInputs(),
+      model, storage.batch_capacity, storage.tree_hmms,
+      [](auto &backend_workspace) {
+        return backend_workspace.CategoricalInputs();
+      },
       [&](tree_hmm::BatchedCategoricalModelView factors,
-          InputUpdate batch_update) {
+          auto &backend_workspace, InputUpdate batch_update) {
         return tree_hmm::PARALLEL_PHYLOGENETICS_TREE_HMM_NAMESPACE::
-            LogPartitionFunctionPrepared(factors, storage.tree_hmm,
+            LogPartitionFunctionPrepared(factors, backend_workspace,
                                          batch_update);
       },
       storage.output, update, storage.timings);
@@ -133,12 +149,20 @@ AlignmentMaximumView MaximumAPosterioriPrepared(AlignmentModelView model,
   internal::ValidatePrepared(model, storage,
                              internal::PreparedOperation::kMaximum);
   return internal::MaximumAPosterioriPrepared(
-      model, storage.tree_hmm.CategoricalInputs(),
-      [&](tree_hmm::BatchedCategoricalModelView factors,
-          InputUpdate batch_update) {
-        return tree_hmm::PARALLEL_PHYLOGENETICS_TREE_HMM_NAMESPACE::
-            MaximumAPosterioriPrepared(factors, storage.tree_hmm, batch_update);
+      model, storage.tree_hmms,
+      [](auto &backend_workspace) {
+        return backend_workspace.CategoricalInputs();
       },
+      [&](tree_hmm::BatchedCategoricalModelView factors,
+          auto &backend_workspace, InputUpdate batch_update) {
+        return tree_hmm::PARALLEL_PHYLOGENETICS_TREE_HMM_NAMESPACE::
+            MaximumAPosterioriPrepared(factors, backend_workspace,
+                                       batch_update);
+      },
+      std::span<Scalar>(storage.output).first(model.sites),
+      std::span<std::uint32_t>(storage.state_output)
+          .first(model.sites * model.plan.num_nodes()),
+      std::span<std::uint32_t>(storage.selected_categories).first(model.sites),
       update, storage.timings);
 }
 
@@ -157,14 +181,31 @@ PosteriorSamplePrepared(AlignmentModelView model,
   internal::ValidatePrepared(model, storage,
                              internal::PreparedOperation::kSampling);
   return internal::PosteriorSamplePrepared(
-      model, uniforms, storage.tree_hmm.CategoricalInputs(),
-      [&](std::size_t batch) { return storage.tree_hmm.Uniforms(batch); },
+      model, uniforms, storage.tree_hmms, storage.sampling_likelihood_tree_hmms,
+      [](auto &backend_workspace) {
+        return backend_workspace.CategoricalInputs();
+      },
+      [](auto &backend_workspace, std::size_t batch) {
+        return backend_workspace.Uniforms(batch);
+      },
       [&](tree_hmm::BatchedCategoricalModelView factors,
-          std::span<const Scalar> staged_uniforms, InputUpdate batch_update) {
+          auto &backend_workspace, InputUpdate batch_update) {
         return tree_hmm::PARALLEL_PHYLOGENETICS_TREE_HMM_NAMESPACE::
-            PosteriorSamplePrepared(factors, staged_uniforms, storage.tree_hmm,
+            LogPartitionFunctionPrepared(factors, backend_workspace,
+                                         batch_update);
+      },
+      [&](tree_hmm::BatchedCategoricalModelView factors,
+          std::span<const Scalar> staged_uniforms, auto &backend_workspace,
+          InputUpdate batch_update) {
+        return tree_hmm::PARALLEL_PHYLOGENETICS_TREE_HMM_NAMESPACE::
+            PosteriorSamplePrepared(factors, staged_uniforms, backend_workspace,
                                     batch_update);
       },
+      std::span<Scalar>(storage.category_output)
+          .first(storage.rate_categories * model.sites),
+      std::span<std::uint32_t>(storage.state_output)
+          .first(model.sites * model.plan.num_nodes()),
+      std::span<std::uint32_t>(storage.selected_categories).first(model.sites),
       update, storage.timings);
 }
 
@@ -180,12 +221,23 @@ AlignmentPosteriorView PosteriorMarginalsPrepared(AlignmentModelView model,
   internal::ValidatePrepared(model, storage,
                              internal::PreparedOperation::kMarginals);
   return internal::PosteriorMarginalsPrepared(
-      model, storage.tree_hmm.CategoricalInputs(),
-      [&](tree_hmm::BatchedCategoricalModelView factors,
-          InputUpdate batch_update) {
-        return tree_hmm::PARALLEL_PHYLOGENETICS_TREE_HMM_NAMESPACE::
-            PosteriorMarginalsPrepared(factors, storage.tree_hmm, batch_update);
+      model, storage.tree_hmms,
+      [](auto &backend_workspace) {
+        return backend_workspace.CategoricalInputs();
       },
+      [&](tree_hmm::BatchedCategoricalModelView factors,
+          auto &backend_workspace, InputUpdate batch_update) {
+        return tree_hmm::PARALLEL_PHYLOGENETICS_TREE_HMM_NAMESPACE::
+            PosteriorMarginalsPrepared(factors, backend_workspace,
+                                       batch_update);
+      },
+      std::span<Scalar>(storage.output).first(model.sites),
+      std::span<Scalar>(storage.node_output)
+          .first(model.sites * model.plan.num_nodes() * 4),
+      std::span<Scalar>(storage.edge_output)
+          .first(model.sites * model.plan.num_edges() * 16),
+      std::span<Scalar>(storage.category_output)
+          .first(storage.rate_categories * model.sites),
       update, storage.timings);
 }
 

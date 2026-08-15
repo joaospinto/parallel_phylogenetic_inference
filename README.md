@@ -12,11 +12,19 @@ inference on top of two independent reusable packages:
 Phylogenetic models, alignments, and biological file formats live here. The
 tree-HMM algebra and scheduler are not duplicated.
 
+[`MODEL_SUPPORT.md`](MODEL_SUPPORT.md) records the exact division of model
+responsibilities across the three packages and the remaining differences from
+BEAGLE.
+
 ## Capabilities
 
 The current implementation provides:
 
-- JC69 likelihoods and log likelihoods on arbitrary rooted trees;
+- JC69, HKY, and general time-reversible (GTR) nucleotide likelihoods and log
+  likelihoods on arbitrary rooted trees, with explicit equilibrium and root
+  frequencies;
+- arbitrary finite mixtures of branch-rate multipliers and a conventional
+  equal-probability, conditional-mean discrete-Gamma constructor;
 - node and edge posterior probabilities for individual sites;
 - accelerator ancestral-state marginals, joint MAP assignments, and posterior
   samples for alignments;
@@ -30,8 +38,11 @@ The current implementation provides:
 - native Metal, CUDA, and ROCm benchmark executables with numerical
   cross-checks.
 
-The optional `beagle_benchmark` target compares the same JC69 likelihood with
-the established BEAGLE library. BEAGLE is confined to benchmark code and is
+The optional `beagle_benchmark` target compares the same reversible nucleotide
+model and rate mixture with the established BEAGLE library. The adapter sends
+the identical precomputed transition matrices and category weights to both
+implementations rather than relying on different eigensolvers. BEAGLE is
+confined to benchmark code and is
 not a dependency of the phylogenetic, tree-HMM, or rake--compress libraries.
 The adapter requires the requested CPU or CUDA implementation and the same
 FP32 or FP64 precision as this package; every result identifies the actual
@@ -68,12 +79,38 @@ workspace storage or reconstruct the topology plan.
 
 Prepared calls use the tree-HMM `CategoricalInputUpdate` lifecycle directly.
 The default `kAll` stages observations and numerical factors. After one such
-call, `kFactors` keeps the observations resident while updating the JC69 root,
-emission, and edge factors; this is the relevant mode when tip data are fixed
-but branch lengths or model parameters change. `kNone` reuses both observations
-and factors for a genuinely fixed-model throughput measurement. `LastTimings()`
-returns the summed backend transfer, kernel, download, and call times, the
-application-level evaluation time, and the number of site batches.
+call, `kFactors` keeps the observations resident while updating the root,
+emission, transition, and rate-mixture factors; this is the relevant mode when
+tip data are fixed but branch lengths or model parameters change. `kNone`
+reuses both observations and factors for a genuinely fixed-model throughput
+measurement. `LastTimings()` returns the summed backend transfer, kernel,
+download, and call times, the application-level evaluation time, and the
+number of site batches and rate-category calls.
+
+The rate category is one latent variable shared by the complete tree at a
+site, as in standard phylogenetic `+Gamma` models. Likelihoods sum over it;
+node and edge marginals also return its posterior probabilities; MAP returns
+the joint maximizing category and nucleotide assignment; and sampling first
+draws the posterior category and then a conditional nucleotide assignment.
+For a mixture, `PosteriorSamplePrepared` therefore accepts the usual
+`sites * nodes` variates followed by one category variate per site. A model can
+be constructed directly:
+
+```cpp
+const auto nucleotide = parallel_phylogenetics::GeneralTimeReversibleModel(
+    {0.31, 0.19, 0.27, 0.23}, {1.2, 3.1, 0.7, 1.8, 4.6, 0.9});
+const auto gamma =
+    parallel_phylogenetics::DiscreteGammaRateMixture(0.5, 4);
+const parallel_phylogenetics::AlignmentModelView model{
+    plan, sites, branch_lengths, tip_nodes, observations,
+    nucleotide, gamma.view()};
+```
+
+The owning `RateMixture` must outlive views made from `gamma.view()`. A custom
+`RateMixture` can express any finite distribution of positive rates. An
+explicit invariant-site (`+I`) point mass is not yet implemented. Transition
+matrices are constructed stably in double precision and cast only at the
+configured library precision.
 
 Resident reuse applies to one exact site batch. If an alignment exceeds the
 workspace capacity, call `SelectSites`, reserve and stage each selected batch
@@ -166,6 +203,18 @@ PRECISION=fp64 scripts/benchmark_beagle.sh \
   --beagle-resource cpu --beagle-threads 1 --repeats 5
 ```
 
+The likelihood benchmark front ends accept the richer models directly. The
+GTR exchangeabilities and frequencies used by the command-line benchmark are
+a fixed, recorded test preset; library callers supply their own values through
+`NucleotideModel`.
+
+```sh
+bazel run //:metal_benchmark --config=fp32 -- \
+  --topology yule --leaves 2048 --sites 512 \
+  --nucleotide-model gtr --rate-categories 4 --gamma-shape 0.5 \
+  --repeats 5
+```
+
 On Linux, `scripts/install_beagle.sh` checksum-verifies and builds upstream
 commit `d1e9c62f922cf544fda4555aedf113519367c07a`, identified as a BEAGLE
 4.1.0 pre-release, for the CPU and, when requested, with its CUDA plugin. The
@@ -177,15 +226,16 @@ commits can be selected with `BEAGLE_VERSION_LABEL`,
 in `BEAGLE_BUILD_METADATA.txt`. A development branch is never silently
 reported as a numbered release.
 
-For JC69, the benchmark constructs finite-time transition matrices with the
-same stable, configured-precision routine used by the native implementation,
-copies them to BEAGLE's double-valued public input, and uploads them through
-BEAGLE's matrix API. This avoids the cancellation observed in BEAGLE's
-single-precision eigendecomposition update on very short branches while
-preserving matched-precision model semantics. Matrix construction and upload
-remain inside the measured factor-update and full-input-update paths; there is
-no precision-specific benchmark path. With a local BEAGLE install, the
-optional FP32 regression is available as
+For every supported reversible nucleotide model, the benchmark constructs
+finite-time transition matrices with the same stable double-precision routine
+used by the native implementation, casts them to the configured native
+precision, copies those values to BEAGLE's double-valued public input, and
+uploads them through BEAGLE's matrix API. This avoids attributing differences
+between eigensolvers to the pruning implementations and prevents the
+cancellation previously observed in BEAGLE's single-precision short-branch
+matrix update. Matrix construction and upload remain inside measured
+factor-update and full-input-update paths. With a local BEAGLE install, the
+optional FP32 regression covers both deep short-edge JC69 and GTR+Gamma:
 `bazel test //:beagle_jc69_regression_test --config=fp32`.
 
 Warmup and workspace allocation are excluded. Within each binary, conventional
@@ -282,7 +332,7 @@ exact pattern compression at specified evolutionary distances. It benchmarks
 complete likelihood evaluation, not a site-order incremental-update method.
 
 Native and BEAGLE rows distinguish `fixed-model` (all observations and numerical factors
-already installed), `factor-update` (observations retained while JC69 factors
+already installed), `factor-update` (observations retained while model factors
 and transition matrices are refreshed), and `full-input-update` (tips and
 factors refreshed). Pattern multiplicities are fixed compression metadata:
 both timed methods produce per-unique-pattern log likelihoods, and the true

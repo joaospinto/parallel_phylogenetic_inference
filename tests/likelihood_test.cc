@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <new>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -102,13 +103,14 @@ double FelsensteinReference(
 } // namespace
 
 int main() {
-  const auto tiny_transition =
-      parallel_phylogenetics::JukesCantorTransition(
-          static_cast<parallel_phylogenetics::Scalar>(1e-12));
+  const auto tiny_transition = parallel_phylogenetics::JukesCantorTransition(
+      static_cast<parallel_phylogenetics::Scalar>(1e-12));
   Check(tiny_transition[1] > parallel_phylogenetics::Scalar{0});
-  Check(tiny_transition[0] + parallel_phylogenetics::Scalar{3} *
-                                  tiny_transition[1] ==
-        parallel_phylogenetics::Scalar{1});
+  Check(Near(
+      tiny_transition[0] +
+          parallel_phylogenetics::Scalar{3} * tiny_transition[1],
+      1.0,
+      8.0 * std::numeric_limits<parallel_phylogenetics::Scalar>::epsilon()));
 
   const btrc::Plan plan =
       btrc::MakePlan(std::vector<std::int64_t>{-1, 0, 0, 1, 1, 3, 2});
@@ -120,8 +122,12 @@ int main() {
   };
   const std::array<parallel_phylogenetics::Scalar, 4> frequencies{0.3, 0.2, 0.2,
                                                                   0.3};
+  parallel_phylogenetics::NucleotideModel nucleotide_model =
+      parallel_phylogenetics::JukesCantorModel();
+  std::copy(frequencies.begin(), frequencies.end(),
+            nucleotide_model.root_frequencies.begin());
   const parallel_phylogenetics::SiteModelView model{plan, lengths, observations,
-                                                    frequencies, 1.0};
+                                                    nucleotide_model};
   const double expected =
       FelsensteinReference(plan, lengths, observations, frequencies);
   const double actual = parallel_phylogenetics::SiteLikelihood(model);
@@ -138,14 +144,41 @@ int main() {
     Check(Near(sum, 1.0));
   }
 
+  const parallel_phylogenetics::NucleotideModel gtr =
+      parallel_phylogenetics::GeneralTimeReversibleModel(
+          {0.31, 0.19, 0.27, 0.23}, {1.2, 3.1, 0.7, 1.8, 4.6, 0.9});
+  const parallel_phylogenetics::RateMixture gamma =
+      parallel_phylogenetics::DiscreteGammaRateMixture(0.5, 4);
+  const parallel_phylogenetics::SiteModelView mixture_site{
+      plan, lengths, observations, gtr, gamma.view()};
+  const double mixture_log =
+      parallel_phylogenetics::SiteLogLikelihood(mixture_site);
+  double explicit_mixture = 0.0;
+  for (std::size_t category = 0; category < gamma.rates().size(); ++category) {
+    explicit_mixture += gamma.weights()[category] *
+                        std::exp(parallel_phylogenetics::SiteLogLikelihood(
+                            parallel_phylogenetics::SelectRateCategory(
+                                mixture_site, category)));
+  }
+  Check(Near(mixture_log, std::log(explicit_mixture)));
+  const auto mixture_posterior =
+      parallel_phylogenetics::AncestralPosterior(mixture_site);
+  Check(Near(mixture_posterior.likelihood, explicit_mixture));
+  for (std::size_t node = 0; node < plan.num_nodes(); ++node) {
+    const double sum = std::accumulate(
+        mixture_posterior.ancestral_states.begin() + node * 4,
+        mixture_posterior.ancestral_states.begin() + (node + 1) * 4, 0.0);
+    Check(Near(sum, 1.0));
+  }
+
   const std::vector<btrc::Index> observation_nodes{4, 5, 6};
   const std::vector<N> alignment_observations{N::kR, N::kG, N::kT,
                                               N::kC, N::kC, N::kA};
   parallel_phylogenetics::AlignmentWorkspace alignment_workspace;
   alignment_workspace.Reserve(plan, 2);
   const tree_hmm::BatchedModelView prepared = parallel_phylogenetics::Prepare(
-      {plan, 2, lengths, observation_nodes, alignment_observations, frequencies,
-       1.0},
+      {plan, 2, lengths, observation_nodes, alignment_observations,
+       nucleotide_model},
       alignment_workspace);
   Check(prepared.batch == 2);
   Check(prepared.states == 4);
@@ -156,8 +189,8 @@ int main() {
   tree_hmm::MutableBatchedModelView direct_destination{plan, 4, 2, direct_nodes,
                                                        direct_edges};
   const tree_hmm::BatchedModelView direct = parallel_phylogenetics::Prepare(
-      {plan, 2, lengths, observation_nodes, alignment_observations, frequencies,
-       1.0},
+      {plan, 2, lengths, observation_nodes, alignment_observations,
+       nucleotide_model},
       direct_destination);
   Check(std::equal(prepared.node_potentials.begin(),
                    prepared.node_potentials.end(),
@@ -183,8 +216,8 @@ int main() {
       categorical_edges};
   const tree_hmm::BatchedCategoricalModelView categorical =
       parallel_phylogenetics::Prepare({plan, 2, lengths, observation_nodes,
-                                       alignment_observations, frequencies,
-                                       1.0},
+                                       alignment_observations,
+                                       nucleotide_model},
                                       categorical_destination);
   for (std::size_t site = 0; site < 2; ++site) {
     std::vector<parallel_phylogenetics::Scalar> reconstructed(
@@ -214,8 +247,16 @@ int main() {
   const std::span<const parallel_phylogenetics::Scalar> sequential =
       parallel_phylogenetics::LogLikelihoodsPrepared(
           {plan, 2, lengths, observation_nodes, alignment_observations,
-           frequencies, 1.0},
+           nucleotide_model},
           sequential_workspace);
+  const std::vector<parallel_phylogenetics::Scalar> sequential_values(
+      sequential.begin(), sequential.end());
+  const parallel_phylogenetics::AlignmentModelView mixture_alignment{
+      plan, 2,           lengths, observation_nodes, alignment_observations,
+      gtr,  gamma.view()};
+  const std::span<const parallel_phylogenetics::Scalar> mixture_sequential =
+      parallel_phylogenetics::LogLikelihoodsPrepared(mixture_alignment,
+                                                     sequential_workspace);
   for (std::size_t site = 0; site < 2; ++site) {
     const std::size_t node_values = plan.num_nodes() * 4;
     std::vector<parallel_phylogenetics::Scalar> site_nodes(
@@ -232,24 +273,34 @@ int main() {
     }
     Check(Near(prepared_log_likelihood,
                parallel_phylogenetics::SiteLogLikelihood(
-                   {plan, lengths, site_observations, frequencies, 1.0}),
+                   {plan, lengths, site_observations, nucleotide_model}),
                2e-6));
-    Check(Near(sequential[site], prepared_log_likelihood, 2e-6));
+    Check(Near(sequential_values[site], prepared_log_likelihood, 2e-6));
+    std::vector<N> site_observations_for_mixture(plan.num_nodes(), N::kUnknown);
+    for (std::size_t index = 0; index < observation_nodes.size(); ++index) {
+      site_observations_for_mixture[observation_nodes[index]] =
+          alignment_observations[site * observation_nodes.size() + index];
+    }
+    Check(Near(
+        mixture_sequential[site],
+        parallel_phylogenetics::SiteLogLikelihood(
+            {plan, lengths, site_observations_for_mixture, gtr, gamma.view()}),
+        2e-5));
   }
   g_allocations = 0;
   g_count_allocations = true;
   for (int repeat = 0; repeat < 10; ++repeat) {
     static_cast<void>(parallel_phylogenetics::Prepare(
         {plan, 2, lengths, observation_nodes, alignment_observations,
-         frequencies, 1.0},
+         nucleotide_model},
         alignment_workspace));
     static_cast<void>(parallel_phylogenetics::Prepare(
         {plan, 2, lengths, observation_nodes, alignment_observations,
-         frequencies, 1.0},
+         nucleotide_model},
         direct_destination));
     static_cast<void>(parallel_phylogenetics::LogLikelihoodsPrepared(
         {plan, 2, lengths, observation_nodes, alignment_observations,
-         frequencies, 1.0},
+         nucleotide_model},
         sequential_workspace));
   }
   g_count_allocations = false;
@@ -299,9 +350,8 @@ int main() {
   Check(interleaved_phylip.records[2].sequence == "TCGGGAAAA");
 
   const parallel_phylogenetics::SequenceAlignment labelled_interleaved =
-      parallel_phylogenetics::ParsePhylip(
-          "3 6\nA ACG\nB_taxon A-N\nC TCG\n\n"
-          "A TTA\nB_taxon CCG\nC GGA\n");
+      parallel_phylogenetics::ParsePhylip("3 6\nA ACG\nB_taxon A-N\nC TCG\n\n"
+                                          "A TTA\nB_taxon CCG\nC GGA\n");
   Check(labelled_interleaved.records[0].sequence == "ACGTTA");
   Check(labelled_interleaved.records[1].sequence == "A-NCCG");
   Check(labelled_interleaved.records[2].sequence == "TCGGGA");
