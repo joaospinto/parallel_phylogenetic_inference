@@ -10,44 +10,41 @@ sha256_file() {
 }
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-parent_dir="$(dirname "${repo_dir}")"
-worktree_dir="$(dirname "${parent_dir}")/worktrees/parallel_phylogenetics_corpora"
-output="${1:-${worktree_dir}/parallel_tree_inference_sources.zip}"
+output="${1:-${repo_dir}/parallel_tree_inference_sources.zip}"
 resume_report="${2:-}"
 mkdir -p "$(dirname "${output}")"
 output="$(cd "$(dirname "${output}")" && pwd)/$(basename "${output}")"
 staging="$(mktemp -d "${TMPDIR:-/tmp}/tree-inference-package.XXXXXX")"
+dependency_staging="$(
+  mktemp -d "${TMPDIR:-/tmp}/tree-inference-dependencies.XXXXXX"
+)"
 archive_staging="$(
   mktemp -d "$(dirname "${output}")/.tree-inference-archive.XXXXXX"
 )"
-trap 'rm -rf "${staging}" "${archive_staging}"' EXIT
+trap 'rm -rf "${staging}" "${dependency_staging}" "${archive_staging}"' EXIT
 
-for repository in parallel_phylogenetic_inference parallel_tree_hmm \
-                  bidirectional_tree_rake_compress; do
-  case "${repository}" in
-    parallel_phylogenetic_inference)
-      source_dir="${PARALLEL_PHYLOGENETIC_INFERENCE_SOURCE:-${parent_dir}/${repository}}"
-      ;;
-    parallel_tree_hmm)
-      source_dir="${PARALLEL_TREE_HMM_SOURCE:-${parent_dir}/${repository}}"
-      ;;
-    bidirectional_tree_rake_compress)
-      source_dir="${BIDIRECTIONAL_TREE_RAKE_COMPRESS_SOURCE:-${parent_dir}/${repository}}"
-      ;;
-  esac
-  if ! git -C "${source_dir}" rev-parse --is-inside-work-tree \
-      >/dev/null 2>&1; then
-    echo "missing Git repository ${source_dir}" >&2
-    exit 2
-  fi
-  if [[ -n "$(git -C "${source_dir}" status --porcelain)" ]]; then
-    echo "${source_dir} has uncommitted files; commit them before packaging" >&2
-    exit 2
-  fi
+if [[ -n "$(git -C "${repo_dir}" status --porcelain)" ]]; then
+  echo "${repo_dir} has uncommitted files; commit them before packaging" >&2
+  exit 2
+fi
+git -C "${repo_dir}" archive --format=tar \
+  --prefix="parallel_phylogenetic_inference/" HEAD | tar -xf - -C "${staging}"
+printf '%s %s\n' parallel_phylogenetic_inference \
+  "$(git -C "${repo_dir}" rev-parse HEAD)" > \
+  "${staging}/SOURCE_REVISIONS.txt"
+
+dependencies=(
+  "parallel_tree_hmm|https://github.com/joaospinto/parallel_tree_hmm.git|af7cc473a21451a86c3b868f9525d5210c9b60e8"
+  "bidirectional_tree_rake_compress|https://github.com/joaospinto/bidirectional_tree_rake_compress.git|36cfd7592a653011ac36ffd8e3d918acc59a2e05"
+)
+for dependency in "${dependencies[@]}"; do
+  IFS='|' read -r repository remote revision <<< "${dependency}"
+  source_dir="${dependency_staging}/${repository}"
+  git clone --quiet --filter=blob:none --no-checkout "${remote}" "${source_dir}"
+  git -C "${source_dir}" cat-file -e "${revision}^{commit}"
   git -C "${source_dir}" archive --format=tar \
-    --prefix="${repository}/" HEAD | tar -xf - -C "${staging}"
-  printf '%s %s\n' "${repository}" \
-    "$(git -C "${source_dir}" rev-parse HEAD)" >> \
+    --prefix="${repository}/" "${revision}" | tar -xf - -C "${staging}"
+  printf '%s %s\n' "${repository}" "${revision}" >> \
     "${staging}/SOURCE_REVISIONS.txt"
 done
 

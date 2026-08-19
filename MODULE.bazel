@@ -19,11 +19,13 @@ use_repo(accelerator_sdks, "cuda", "rocm_sdk")
 beagle = use_extension("//third_party/beagle:extension.bzl", "beagle")
 use_repo(beagle, "beagle")
 
-local_path_override(
+git_override(
     module_name = "bidirectional_tree_rake_compress",
-    path = "../bidirectional_tree_rake_compress",
+    commit = "36cfd7592a653011ac36ffd8e3d918acc59a2e05",
+    remote = "https://github.com/joaospinto/bidirectional_tree_rake_compress.git",
 )
-local_path_override(
+git_override(
     module_name = "parallel_tree_hmm",
-    path = "../parallel_tree_hmm",
+    commit = "af7cc473a21451a86c3b868f9525d5210c9b60e8",
+    remote = "https://github.com/joaospinto/parallel_tree_hmm.git",
 )

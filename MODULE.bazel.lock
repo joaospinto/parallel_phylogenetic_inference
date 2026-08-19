@@ -208,7 +208,7 @@
     "@@rules_cuda+//cuda:extensions.bzl%toolchain": {
       "general": {
         "bzlTransitiveDigest": "KvlM8RQ+m1CHcDiikj56s8spV/6NwiJDypZXgD04dZA=",
-        "usagesDigest": "LbOPZQV7wZq5gDBKF5ohaL3W5vA5nTrFJTGbHiN2UCk=",
+        "usagesDigest": "BbShA4yBAW/CWs+QU8IpDM+lj53CBE1/mfmnQxKr/Ak=",
         "recordedInputs": [
           "REPO_MAPPING:bazel_tools,rules_cc rules_cc+",
           "REPO_MAPPING:rules_cc+,bazel_skylib bazel_skylib+",

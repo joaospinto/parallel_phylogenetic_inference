@@ -142,8 +142,8 @@ embedding a random-number generator in the inference package.
 
 ## Build and test
 
-Keep this repository beside `bidirectional_tree_rake_compress` and
-`parallel_tree_hmm`. Bazel resolves both through local module overrides.
+The public `bidirectional_tree_rake_compress` and `parallel_tree_hmm`
+dependencies are pinned and fetched automatically from GitHub.
 
 ```sh
 bazel test //... --config=fp64
@@ -218,7 +218,7 @@ bazel run //:metal_benchmark --config=fp32 -- \
 On Linux, `scripts/install_beagle.sh` checksum-verifies and builds upstream
 commit `d1e9c62f922cf544fda4555aedf113519367c07a`, identified as a BEAGLE
 4.1.0 pre-release, for the CPU and, when requested, with its CUDA plugin. The
-optional local dependency is discovered through `BEAGLE_PREFIX`; ordinary
+optional BEAGLE installation is selected through `BEAGLE_PREFIX`; ordinary
 Bazel targets remain buildable when BEAGLE is absent. Exact alternative source
 commits can be selected with `BEAGLE_VERSION_LABEL`,
 `BEAGLE_SOURCE_REVISION`, `BEAGLE_SOURCE_URL`, and
@@ -544,8 +544,8 @@ sweep. CPU capacity probes run under a ceiling derived from the runtime memory
 limit, so an oversized probe fails in its child process rather than invoking
 the notebook-wide OOM killer. Unrelated failures remain fatal.
 
-Until these repositories are public, create the notebook input bundle from
-clean commits:
+Create a notebook input bundle from this clean checkout and the pinned public
+dependency revisions:
 
 ```sh
 scripts/package_notebook_sources.sh
@@ -557,7 +557,7 @@ new source bundle, use:
 
 ```sh
 scripts/package_notebook_sources.sh \
-  ~/worktrees/parallel_phylogenetics_corpora/parallel_tree_inference_sources.zip \
+  parallel_tree_inference_sources.zip \
   previous_parallel_phylogenetics_cuda_report.txt
 ```
 
